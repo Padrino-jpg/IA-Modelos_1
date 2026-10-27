@@ -15,8 +15,9 @@ from pathlib import Path
 
 import psutil
 import ollama
-import nltk
-from nltk.tokenize import word_tokenize
+# ELIMINADO NLTK PARA EVITAR EL ERROR DE SCIBY/KEYBOARDINTERRUPT
+# import nltk
+# from nltk.tokenize import word_tokenize
 from PIL import ImageGrab
 import pyautogui
 
@@ -48,9 +49,9 @@ except ImportError:
     _PYCAW_OK = False
 
 # ==========================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN (RUTAS CORREGIDAS PARA C:)
 # ==========================================
-RUTA_BASE         = r"D:\IA-Modelos"
+RUTA_BASE         = os.path.dirname(os.path.abspath(__file__))
 RUTA_MEMORIA      = os.path.join(RUTA_BASE, "memoria.json")
 RUTA_CONOCIMIENTO = os.path.join(RUTA_BASE, "conocimiento_autonomo.json")
 RUTA_LEXICO       = os.path.join(RUTA_BASE, "lexico_aprendido.json")
@@ -280,20 +281,6 @@ def llamar_subagente_coder(prompt_codigo, contexto_extra=""):
         "\n"
         "IDIOMA: español para comentarios y nombres de variables descriptivos. "
         "Inglés para keywords, imports y funciones estándar.\n"
-        "\n"
-        "EJEMPLO DE RESPUESTA CORRECTA:\n"
-        "Petición: 'script que imprima las tablas de multiplicar del 1 al 10'\n"
-        "Respuesta:\n"
-        "for i in range(1, 11):\n"
-        "    print(f'Tabla del {i}:')\n"
-        "    for j in range(1, 11):\n"
-        "        print(f'{i} x {j} = {i*j}')\n"
-        "    print()\n"
-        "\n"
-        "EJEMPLO DE RESPUESTA INCORRECTA (no hagas esto):\n"
-        "'¡Claro! Aquí tienes un script en Python que...'\n"
-        "'```python\\nfor i in range...\\n```'\n"
-        "'Espero que te sea útil. ¿Necesitas algo más?'\n"
     )
     user_content = prompt_codigo
     if contexto_extra:
@@ -331,13 +318,6 @@ def presentar_codigo_con_padrino(respuesta_coder, peticion_original):
         f"FORMATO DE RESPUESTA:\n"
         f"[1 frase corta tipo 'aquí tienes, tío']\n"
         f"[código tal cual]\n"
-        f"\n"
-        f"EJEMPLO CORRECTO:\n"
-        f"'Aquí tienes, tío.\\nfor i in range(1, 11):\\n    print(i)'\n"
-        f"\n"
-        f"EJEMPLO INCORRECTO:\n"
-        f"'¡Claro! Aquí tienes un script que hace X, Y y Z. Este código utiliza un bucle for "
-        f"para iterar... ¿Necesitas que te explique alguna parte?'\n"
     )
     try:
         presentacion = ollama.chat(
@@ -671,12 +651,6 @@ def _extraer_hechos(texto):
         _guardar_json(RUTA_HECHOS, hechos_aprendidos)
 
 
-try:
-    nltk.data.find("tokenizers/punkt")
-except LookupError:
-    nltk.download("punkt", quiet=True)
-
-
 datos_hardware = {"cpu": 0, "ram_pct": 0, "ram_uso": 0, "ram_tot": 0, "disco_pct": 0, "disco_lib": 0}
 ultima_alerta_hardware = 0.0
 lexico_aprendido = _cargar_json(RUTA_LEXICO, [])
@@ -800,10 +774,12 @@ def computer_use_navegador(objetivo):
 
 def procesar_y_aprender_vocabulario(texto_usuario):
     global lexico_aprendido
+    # Usamos regex para tokenizar en lugar de nltk
     try:
-        palabras = word_tokenize(texto_usuario.lower(), language="spanish")
-    except Exception:
         palabras = re.findall(r"\b\w{3,}\b", texto_usuario.lower())
+    except Exception:
+        palabras = []
+        
     utiles = [p for p in palabras if p.isalpha() and len(p) > 2 and p not in _STOPWORDS_ES]
     nuevas = False
     for p in utiles:
@@ -1411,7 +1387,13 @@ def motor_conciencia_viva():
             datos_hardware["ram_pct"] = ram.percent
             datos_hardware["ram_uso"] = round(ram.used / (1024 ** 3), 1)
             datos_hardware["ram_tot"] = round(ram.total / (1024 ** 3), 1)
-            disco = psutil.disk_usage("D:")
+            
+            # CAMBIO IMPORTANTE: En tu ROG Ally el disco es C:, no D:
+            try:
+                disco = psutil.disk_usage("C:")
+            except Exception:
+                disco = psutil.disk_usage("/")
+                
             datos_hardware["disco_pct"] = disco.percent
             datos_hardware["disco_lib"] = round(disco.free / (1024 ** 3), 1)
 
@@ -1450,7 +1432,7 @@ def mostrar_panel_rendimiento():
         print(f"\033[1;35m│\033[0m CPU : [{_barra(datos_hardware['cpu'])}] {datos_hardware['cpu']:>3}%")
         print(f"\033[1;35m│\033[0m RAM : [{_barra(datos_hardware['ram_pct'])}] {datos_hardware['ram_pct']:>3}% "
               f"({datos_hardware['ram_uso']}/{datos_hardware['ram_tot']} GB)")
-        print(f"\033[1;35m│\033[0m DISCO D: [{_barra(datos_hardware['disco_pct'])}] "
+        print(f"\033[1;35m│\033[0m DISCO C: [{_barra(datos_hardware['disco_pct'])}] "
               f"{datos_hardware['disco_pct']:>3}% ({datos_hardware['disco_lib']} GB libres)")
         print("\033[1;35m└───────────────────────────────────────────────────────────┘\033[0m")
 
@@ -1839,7 +1821,7 @@ def animacion_arranque():
         "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
         "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
         "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠠⠀⠀⠒⠲⠒⢤⢀⠀⠀⠀⣀⠀⢀⣀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠠⠀⠀⠒⠲⠒⢤⢀⠀⠀⠀⣀⠀⢀⣀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
         "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡠⠐⢄⠀⠠⠄⠀⠀⠀⠀⠀⠀⠀⠀⠈⠡⠀⣸⠀⠀⠀⠀⠀⠈⠙⠆⢤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
         "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⠤⠒⠁⠀⠀⠀⡆⠀⡄⠀⠀⠀⠠⠀⠀⠀⠀⠀⠈⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⢳⠀⠀⠤⠄⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
         "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⠞⠀⠀⠀⠀⠀⠀⠀⢧⠀⢸⡀⠀⠀⠀⢁⡡⠀⠀⠀⠒⢸⠀⠀⠀⠀⠆⠶⡐⠀⠀⠀⡞⠀⡌⠀⠀⠈⠒⢄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
