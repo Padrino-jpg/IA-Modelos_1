@@ -25,7 +25,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import (
     Qt, QThread, Signal, QTimer, QPoint, QPointF, QRectF, QObject, QUrl,
-    QAbstractNativeEventFilter, QPropertyAnimation
+    QAbstractNativeEventFilter, QPropertyAnimation, QRect, QEasingCurve, QVariantAnimation
 )
 try:
     from PySide6.QtMultimedia import QSoundEffect
@@ -413,13 +413,14 @@ class FiltroAtajo(QAbstractNativeEventFilter):
             self.registrado = False
 class WorkerIA(QThread):
     respuesta_lista = Signal(str)
+    accion = Signal()
     def __init__(self, prompt):
         super().__init__()
         self.prompt = prompt
     def run(self):
         try:
             import ia_puente
-            respuesta = ia_puente.obtener_respuesta(self.prompt)
+            respuesta = ia_puente.obtener_respuesta(self.prompt, self.accion.emit)
             self.respuesta_lista.emit(str(respuesta))
         except Exception as e:
             self.respuesta_lista.emit(f"Error: {e}")
@@ -472,13 +473,38 @@ def dibujar_cara_geo(p, r):
     p.setBrush(Qt.BrushStyle.NoBrush)
     p.drawPolyline(QPolygonF([P(.22, .82), P(.33, .74), P(.43, .86), P(.54, .74), P(.64, .86), P(.78, .76)]))
     p.restore()
+_CARA_PM = None
+def _cara_pixmap():
+    global _CARA_PM
+    if _CARA_PM is None:
+        _CARA_PM = QPixmap(RUTA_CARA) if os.path.exists(RUTA_CARA) else QPixmap()
+    return _CARA_PM
+def dibujar_cara_gengar(p, r):
+    pm = _cara_pixmap()
+    if pm.isNull():
+        dibujar_cara_geo(p, r)
+        return
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    p.setClipRect(r, Qt.ClipOperation.IntersectClip)
+    asp = r.width() / max(1.0, r.height())
+    sw = min(float(pm.width()), 400.0 if asp <= 1.2 else 450.0)
+    sh = sw / asp
+    if sh > pm.height():
+        sh = float(pm.height())
+        sw = sh * asp
+    cx, cy = pm.width() / 2, pm.height() * 0.49
+    sx = max(0.0, min(cx - sw / 2, pm.width() - sw))
+    sy = max(0.0, min(cy - sh / 2, pm.height() - sh))
+    p.drawPixmap(r, pm, QRectF(sx, sy, sw, sh))
+    p.restore()
 class AvatarGeo(QWidget):
     def __init__(self, lado=60):
         super().__init__()
         self.setFixedSize(lado, lado)
     def paintEvent(self, ev):
         p = QPainter(self)
-        dibujar_cara_geo(p, QRectF(2, 2, self.width() - 4, self.height() - 4))
+        dibujar_cara_gengar(p, QRectF(2, 2, self.width() - 4, self.height() - 4))
         p.setPen(QPen(QColor(C_MORADO), 2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(1, 1, self.width() - 2, self.height() - 2)
@@ -578,7 +604,7 @@ class PanelMisionCyberpunk(QWidget):
         p.setBrush(QColor(C_FONDO))
         p.setPen(QPen(morado, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap, Qt.PenJoinStyle.MiterJoin))
         p.drawPolygon(poly_cortado(2, 2, PW - 4, h - 4, 24, 12, 12, 0))
-        dibujar_cara_geo(p, QRectF(m, m, self.AV, self.AV))
+        dibujar_cara_gengar(p, QRectF(m, m, self.AV, self.AV))
         p.setPen(QPen(morado, 2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(QRectF(m, m, self.AV, self.AV))
@@ -606,7 +632,7 @@ class PanelMisionCyberpunk(QWidget):
         p.setPen(QColor(C_GRIS))
         disp = PW - m - bw - 10 - nx
         p.drawText(QPointF(nx, m + 11),
-                   QFontMetrics(self.f_sub).elidedText("/ NIGHT-CITY-…", Qt.TextElideMode.ElideRight, int(max(10, disp))))
+                   QFontMetrics(self.f_sub).elidedText("/ CIUDAD-NOCTURNA-…", Qt.TextElideMode.ElideRight, int(max(10, disp))))
         p.setFont(self.f_titulo)
         p.setPen(QColor("#ffffff"))
         for i, l in enumerate(self.lt):
@@ -659,9 +685,9 @@ class VentanaChatCyberdeck(QWidget):
         tit = QVBoxLayout()
         tit.setSpacing(4)
         self.lbl_titulo = QLabel(f"<span style='color:#fff; font-weight:bold; letter-spacing:2px;'>GENGAR</span>"
-                                 f" <span style='color:{C_GRIS};'>/ NIGHT-CITY-2077</span>")
+                                 f" <span style='color:{C_GRIS};'>/ CIUDAD-NOCTURNA-2077</span>")
         self.lbl_titulo.setStyleSheet("font-family: 'Consolas'; font-size: 14px;")
-        self.lbl_estado = QLabel("EN LIGNE")
+        self.lbl_estado = QLabel("EN LÍNEA")
         self.lbl_estado.setFixedHeight(16)
         self.lbl_estado.setAlignment(Qt.AlignCenter)
         self.lbl_estado.setStyleSheet(f"background: {C_VERDE}; color: #04140a; font-family: 'Consolas'; "
@@ -671,7 +697,7 @@ class VentanaChatCyberdeck(QWidget):
         fila.addStretch()
         tit.addWidget(self.lbl_titulo)
         tit.addLayout(fila)
-        self.btn_limpiar = QPushButton("[PURGE_LOG]")
+        self.btn_limpiar = QPushButton("[PURGAR_LOG]")
         self.btn_limpiar.setFixedSize(95, 30)
         self.btn_limpiar.setStyleSheet(f"QPushButton {{ background: transparent; color: {C_MORADO}; "
                                        f"font-weight: bold; font-family: 'Consolas'; border: 2px solid {C_MORADO}; }}"
@@ -704,15 +730,15 @@ class VentanaChatCyberdeck(QWidget):
             QScrollBar::handle:vertical {{ background: {C_MORADO}; }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
         """)
-        self.lbl_typing = QLabel("GENGAR ÉCRIT...")
+        self.lbl_typing = QLabel("GENGAR ESCRIBE...")
         self.lbl_typing.setStyleSheet(f"color: {C_VERDE}; font-family: 'Consolas'; font-size: 11px; font-weight: bold;")
         self.lbl_typing.hide()
         self.timer_typing = QTimer(self)
         self.timer_typing.timeout.connect(self._parpadear_typing)
         lb = QHBoxLayout()
-        self.btn_bola = QPushButton(">> GHOST_ROLL")
-        self.btn_bailar = QPushButton(">> OVERRIDE_DANCE")
-        self.btn_dormir = QPushButton(">> SLEEP_MODE")
+        self.btn_bola = QPushButton(">> BOLA_FANTASMA")
+        self.btn_bailar = QPushButton(">> BAILE_FORZADO")
+        self.btn_dormir = QPushButton(">> MODO_SUEÑO")
         estilo = f"""
             QPushButton {{
                 background-color: {C_FONDO};
@@ -732,7 +758,7 @@ class VentanaChatCyberdeck(QWidget):
         self.btn_bailar.clicked.connect(lambda: self.accion_rapida.emit("bailar"))
         self.btn_dormir.clicked.connect(lambda: self.accion_rapida.emit("dormir"))
         self.input_texto = QLineEdit()
-        self.input_texto.setPlaceholderText(">> ENTRE TA COMMANDE, CHOOM...")
+        self.input_texto.setPlaceholderText(">> ESCRIBE TU COMANDO, TÍO...")
         self.input_texto.setStyleSheet(f"""
             QLineEdit {{
                 background-color: #080510;
@@ -787,9 +813,9 @@ class VentanaChatCyberdeck(QWidget):
         p.drawPolygon(poly_cortado(2, 2, w - 4, h - 4, 34, 16, 16, 0))
     def agregar_mensaje(self, remitente, texto):
         if remitente == "Tú":
-            prefijo, c1, color = "choom >", "#ffffff", "#ffffff"
+            prefijo, c1, color = "tú >", "#ffffff", "#ffffff"
         elif remitente == "Sistema":
-            prefijo, c1, color = "SYS_ERR:", C_ROJO, C_ROJO
+            prefijo, c1, color = "SISTEMA:", C_ROJO, C_ROJO
         else:
             prefijo, c1, color = "GENGAR >", C_VERDE, C_TEXTO
         self.historial.append(
@@ -808,7 +834,7 @@ class VentanaChatCyberdeck(QWidget):
                   "/bola": ("bola", "Bola Fantasma activado."), "/hipnosis": ("hipnosis", "Hipnosis activada.")}
             if comando in ok:
                 self.accion_rapida.emit(ok[comando][0])
-                self.agregar_mensaje("Sistema", "OVERRIDE: " + ok[comando][1])
+                self.agregar_mensaje("Sistema", "ANULACIÓN: " + ok[comando][1])
             else:
                 self.agregar_mensaje("Sistema", "ERROR: Comando no reconocido.")
         else:
@@ -1091,7 +1117,7 @@ class CutIn(Fx):
         p.fillRect(QRectF(fx_ - 40, fy_ + lado * 0.35, 36, 3), QColor(255, 30, 80))
         p.restore()
         p.setOpacity(a)
-        dibujar_cara_geo(p, QRectF(fx_ + jx, fy_, lado * 1.8, lado))
+        dibujar_cara_gengar(p, QRectF(fx_ + jx, fy_, lado * 1.8, lado))
         p.setPen(QPen(QColor(C_MORADO), 3))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(QRectF(fx_ + jx, fy_, lado * 1.8, lado))
@@ -1423,7 +1449,7 @@ class Chip(QWidget):
         marco = QPainterPath()
         marco.addRoundedRect(QRectF(2, 2, 56, 56), 14, 14)
         p.setClipPath(marco)
-        dibujar_cara_geo(p, QRectF(2, 2, 56, 56))
+        dibujar_cara_gengar(p, QRectF(2, 2, 56, 56))
         abre = (int(time.time()) % 7 == 0)
         p.fillRect(self.rect(), QColor(10, 6, 20, 35 if abre else 150))
         p.setClipping(False)
@@ -2387,10 +2413,25 @@ class PetGengar(QWidget):
         self.t_actividad = time.time()
         self.cancelar_pendientes()
         self.cambiar_estado("pensando")
-        self.decir("Gengar está tramando algo...", 60000, badge="EN COURS", tipo="info")
+        self.decir("Gengar está tramando algo...", 60000, badge="EN CURSO", tipo="info")
         self.worker = WorkerIA(prompt)
         self.worker.respuesta_lista.connect(self.mostrar_respuesta)
+        self.worker.accion.connect(self.fx_accion)
         self.worker.start()
+    def fx_accion(self):
+        ahora = time.time()
+        if ahora - getattr(self, "t_fx_accion", 0.0) < 1.5 or self.guardado or self.chip_estado:
+            return
+        self.t_fx_accion = ahora
+        c = self.centro_sprite()
+        self.sonido("charge")
+        self.fx.agregar(Onda(c.x(), c.y(), r_max=380, dur=0.8))
+        self.fx.agregar(LineasVelocidad(c.x(), c.y(), dur=0.9))
+        self.fx.agregar(Particulas(c.x(), c.y(), n=26, colores=VIOLETAS + ["#ffffff"], vel=(120, 420), grav=300, dur=1.0))
+        self.cutin()
+        self.impacto()
+        self.vista.glitch = 0.8
+        QTimer.singleShot(900, lambda: setattr(self.vista, "glitch", 0.0))
     def mostrar_respuesta(self, texto):
         self.respuesta_para_chat.emit(texto)
         self.cancelar_pendientes()
@@ -2523,7 +2564,7 @@ class PetGengar(QWidget):
         self.vista.glitch = 1.0
         self.velocidad_x = -12 * self.dir
         self.velocidad_y = -7
-        self.decir(linea, 6000, maxlen=118, titulo="Échec, choom.", badge="ERREUR", tipo="error")
+        self.decir(linea, 6000, maxlen=118, titulo="Fallo, tío.", badge="ERROR", tipo="error")
         self.tras(600, lambda: setattr(self.vista, "glitch", 0.0))
         self.tras(1800, self._volver_tras_evento)
     def notificacion(self, d):
@@ -2567,7 +2608,7 @@ class PetGengar(QWidget):
         c = self.centro_sprite()
         self.fx.agregar(Onda(c.x(), c.y(), r_max=220, color="#ff5252", dur=0.6))
         self.cutin()
-        self.decir(self.cl["msg_espera"], 20000, maxlen=118, titulo="J'ai besoin de toi, choom.", badge="ATTENTE", tipo="espera")
+        self.decir(self.cl["msg_espera"], 20000, maxlen=118, titulo="Te necesito, tío.", badge="EN ESPERA", tipo="espera")
     def salir_espera(self):
         self.cl["fase"] = "trabajando"
         if self.estado == "espera":
@@ -2592,7 +2633,7 @@ class PetGengar(QWidget):
         resumen = f"{acc} acciones · {narch} archivos · {m}m {s:02d}s" if acc else ""
         tt = f"{s} s" if not m else f"{m} min {s} s"
         cl.update(fase="idle", ultimo=ultimo, resumen=resumen, t0=0.0, t_fin=time.time(),
-                  stats=f"{acc} actions · {narch} fichiers modifiés · {tt}" if acc else "")
+                  stats=f"{acc} acciones · {narch} archivos modificados · {tt}" if acc else "")
         self.quitar_ticker()
         largo = dur >= LUNA_LARGA_MIN * 60 or acc >= LUNA_LARGA_ACC
         if self.guardado or self.chip_estado:
@@ -2605,7 +2646,7 @@ class PetGengar(QWidget):
         if acc == 0:
             self.sonido("done")
             self.cambiar_estado("bailar")
-            self.decir(ultimo or "", 6000, maxlen=118, titulo="Mission accomplie, choom.", badge="TERMINÉ", tipo="ok")
+            self.decir(ultimo or "", 6000, maxlen=118, titulo="Misión cumplida, tío.", badge="TERMINADO", tipo="ok")
             self.tras(3000, self.volver_a_patrullar)
             return
         a = self.area()
@@ -2642,7 +2683,7 @@ class PetGengar(QWidget):
         self.frame = 0
         self.dibujar()
     def _v_fin(self, resumen, ultimo, largo):
-        self.decir(ultimo or "", 14000, maxlen=150, titulo="Mission accomplie, choom.", badge="TERMINÉ",
+        self.decir(ultimo or "", 14000, maxlen=150, titulo="Misión cumplida, tío.", badge="TERMINADO",
                    tipo="ok", stats=self.cl.get("stats", ""))
         self.velocidad_y = 0
         self.cambiar_estado("caer")
@@ -3069,34 +3110,569 @@ def crear_tray(app, pet, mostrar_chat):
         lambda t, m: tray.showMessage(t, m, QSystemTrayIcon.MessageIcon.Information, 5000))
     tray.show()
     return tray
+RUTA_SPRITE = os.path.join(RUTA_IMAGENES, "shime_flotar.png")
+if not os.path.exists(RUTA_SPRITE):
+    RUTA_SPRITE = os.path.join(RUTA_IMAGENES, "shime3.png")
+_I_MORADO_PROFUNDO = QColor(74, 20, 120)
+_I_MORADO_NEON = QColor(150, 60, 220)
+_I_VERDE_NEON = QColor(57, 255, 120)
+_I_ROJO = QColor(215, 50, 70)
+class IntroLuna(QWidget):
+    def __init__(self, parent=None, diametro=150):
+        super().__init__(parent)
+        self.diametro = diametro
+        self.alfa = 1.0
+        self._pulso = 0.0
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        lado = int(diametro * 3.4)
+        self.resize(lado, lado)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(40)
+    def _tick(self):
+        self._pulso += 0.05
+        self.update()
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setOpacity(self.alfa)
+        p.setRenderHint(QPainter.Antialiasing)
+        c = QPointF(self.width() / 2, self.height() / 2)
+        r = self.diametro / 2
+        pulso = 0.5 + 0.5 * math.sin(self._pulso)
+        radio_halo = r * 3.2
+        g = QRadialGradient(c, radio_halo)
+        g.setColorAt(0.0, QColor(150, 90, 230, int(110 + 40 * pulso)))
+        g.setColorAt(0.3, QColor(110, 40, 180, int(70 + 30 * pulso)))
+        g.setColorAt(0.6, QColor(57, 255, 120, int(14 + 10 * pulso)))
+        g.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(g))
+        p.drawEllipse(c, radio_halo, radio_halo)
+        gl = QRadialGradient(QPointF(c.x() - r * 0.25, c.y() - r * 0.25), r * 1.2)
+        gl.setColorAt(0.0, QColor(235, 230, 255))
+        gl.setColorAt(0.7, QColor(190, 180, 225))
+        gl.setColorAt(1.0, QColor(140, 120, 190))
+        p.setBrush(QBrush(gl))
+        p.drawEllipse(c, r, r)
+        p.setBrush(QColor(120, 105, 165, 110))
+        for dx, dy, rr in ((-0.35, -0.2, 0.18), (0.25, 0.1, 0.24), (-0.1, 0.45, 0.14), (0.4, -0.4, 0.1), (-0.5, 0.25, 0.1)):
+            p.drawEllipse(QPointF(c.x() + dx * r, c.y() + dy * r), rr * r, rr * r)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(57, 255, 120, 60), 2))
+        p.drawEllipse(c, r + 3, r + 3)
+        p.end()
+class IntroNiebla(QWidget):
+    def __init__(self, parent, ancho, alto, cy_luna):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.resize(ancho, alto)
+        self._ancho = ancho
+        self.alfa = 1.0
+        self._t = 0.0
+        colores = [(120, 80, 190), (55, 150, 100), (95, 70, 135), (150, 60, 160)]
+        self._bancos = []
+        for i in range(20):
+            capa = i % 4
+            if capa == 0:
+                y = random.uniform(cy_luna - 60, cy_luna + 40)
+            elif capa == 1:
+                y = random.uniform(cy_luna + 40, cy_luna + 220)
+            elif capa == 2:
+                y = random.uniform(alto * 0.4, alto * 0.7)
+            else:
+                y = random.uniform(alto * 0.8, alto * 1.0)
+            self._bancos.append({
+                "x": random.uniform(-200, ancho + 200),
+                "y": y,
+                "r": random.uniform(260, 520),
+                "v": random.uniform(6, 20) * random.choice((-1, 1)),
+                "a": random.randint(26, 52),
+                "c": random.choice(colores),
+                "f": random.uniform(0.3, 0.8),
+                "ph": random.uniform(0, 6.28),
+            })
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(40)
+    def _tick(self):
+        self._t += 0.04
+        for b in self._bancos:
+            b["x"] += b["v"] * 0.04
+            if b["x"] > self._ancho + b["r"]:
+                b["x"] = -b["r"]
+            elif b["x"] < -b["r"]:
+                b["x"] = self._ancho + b["r"]
+        self.update()
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setOpacity(self.alfa)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        for b in self._bancos:
+            y = b["y"] + 12 * math.sin(self._t * b["f"] + b["ph"])
+            a = int(b["a"] * (0.75 + 0.25 * math.sin(self._t * 0.6 + b["ph"])))
+            r, g, bl = b["c"]
+            grad = QRadialGradient(QPointF(0, 0), b["r"])
+            grad.setColorAt(0.0, QColor(r, g, bl, a))
+            grad.setColorAt(0.55, QColor(r, g, bl, a // 3))
+            grad.setColorAt(1.0, QColor(r, g, bl, 0))
+            p.save()
+            p.translate(b["x"], y)
+            p.scale(1.0, 0.3)
+            p.setBrush(QBrush(grad))
+            p.drawEllipse(QPointF(0, 0), b["r"], b["r"])
+            p.restore()
+        p.end()
+class IntroPanelLlamada(QWidget):
+    def __init__(self, parent, ruta_cara):
+        super().__init__(parent)
+        self.setFixedSize(980, 420)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setMouseTracking(True)
+        self.cara = QPixmap(ruta_cara)
+        self._cw, self._ch = 150, 250
+        self._fw, self._fh = self._cw - 16, self._ch - 16 - 46
+        self.face_pm = self._preparar_cara(self._fw, self._fh)
+        self._glitch = False
+        self._gx = 0
+        self._rects = []
+        self._slices = []
+        self._banda = 150
+        self._ticks = 0
+        self._parpadeo = True
+        self._barras = [(random.randint(0, 120), random.randint(1, 3)) for _ in range(26)]
+        self.rect_answer = QRect(344, 304, 270, 70)
+        self.rect_reject = QRect(644, 304, 270, 70)
+        self.callback_answer = None
+        self.callback_reject = None
+        self._hover = None
+        self._t_glitch = QTimer(self)
+        self._t_glitch.timeout.connect(self._tick)
+        self._t_glitch.start(70)
+        self._t_parp = QTimer(self)
+        self._t_parp.timeout.connect(self._parp)
+        self._t_parp.start(600)
+    def _preparar_cara(self, w, h):
+        base = QPixmap(w, h)
+        base.fill(QColor(10, 0, 14))
+        q = QPainter(base)
+        if not self.cara.isNull():
+            img = self.cara.scaled(w, h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            q.drawPixmap((w - img.width()) // 2, (h - img.height()) // 2, img)
+            q.fillRect(0, 0, w, h, QColor(225, 30, 60, 100))
+            q.setPen(QPen(QColor(0, 0, 0, 80), 1))
+            for yy in range(0, h, 3):
+                q.drawLine(0, yy, w, yy)
+        else:
+            q.setPen(_I_ROJO)
+            q.setFont(QFont("Consolas", 11, QFont.Bold))
+            q.drawText(QRect(0, 0, w, h), Qt.AlignCenter, "SIN SEÑAL")
+        q.end()
+        return base
+    def _parp(self):
+        self._parpadeo = not self._parpadeo
+        self.update()
+    def _tick(self):
+        self._ticks += 1
+        prob = 0.7 if self._ticks < 10 else 0.2
+        if random.random() < prob:
+            self._glitch = True
+            self._gx = random.randint(-9, 9)
+            self._rects = [
+                QRect(random.randint(0, 760), random.randint(20, 400), random.randint(40, 260), random.randint(2, 6))
+                for _ in range(random.randint(2, 5))
+            ]
+            self._slices = [
+                (random.randint(0, self._fh - 20), random.randint(4, 18), random.randint(-14, 14))
+                for _ in range(random.randint(1, 3))
+            ]
+            self._banda = random.randint(140, 200)
+        else:
+            self._glitch = False
+            self._gx = 0
+            self._rects = []
+            self._slices = []
+        self.update()
+    def mouseMoveEvent(self, e):
+        pos = e.position().toPoint()
+        nuevo = None
+        if self.rect_answer.contains(pos):
+            nuevo = "answer"
+        elif self.rect_reject.contains(pos):
+            nuevo = "reject"
+        if nuevo != self._hover:
+            self._hover = nuevo
+            self.setCursor(Qt.PointingHandCursor if nuevo else Qt.ArrowCursor)
+            self.update()
+    def mousePressEvent(self, e):
+        pos = e.position().toPoint()
+        if self.rect_answer.contains(pos) and self.callback_answer:
+            self.callback_answer()
+        elif self.rect_reject.contains(pos) and self.callback_reject:
+            self.callback_reject()
+    def _ruta_corte(self, x, y, w, h, corte=22):
+        path = QPainterPath()
+        path.moveTo(x + corte, y)
+        path.lineTo(x + w, y)
+        path.lineTo(x + w, y + h - corte)
+        path.lineTo(x + w - corte, y + h)
+        path.lineTo(x, y + h)
+        path.lineTo(x, y + corte)
+        path.closeSubpath()
+        return path
+    def _texto(self, p, x, y, texto, fuente, color, brillo=1.0, dx=0):
+        path = QPainterPath()
+        path.addText(x + dx, y, fuente, texto)
+        if brillo > 0:
+            for grosor, a in ((9, 22), (5, 45), (2.5, 80)):
+                c = QColor(color)
+                c.setAlpha(int(a * brillo))
+                p.strokePath(path, QPen(c, grosor, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.fillPath(path, color)
+    def _dibujar_telefono(self, p):
+        c = _I_MORADO_NEON
+        cuerpo = QRectF(30, 76, 40, 74)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(150, 60, 220, 60), 6))
+        p.drawRoundedRect(cuerpo, 7, 7)
+        p.setPen(QPen(c, 2))
+        p.drawRoundedRect(cuerpo, 7, 7)
+        p.setPen(QPen(QColor(150, 60, 220, 150), 1))
+        p.drawRect(QRectF(35, 84, 30, 48))
+        p.setBrush(c)
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QPointF(50, 141), 2.5, 2.5)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(c, 2))
+        for r in (9, 16, 23):
+            p.drawArc(QRectF(50 - r, 66 - r, 2 * r, 2 * r), 40 * 16, 100 * 16)
+        p.setPen(QPen(QColor(150, 60, 220, 90), 1))
+        p.drawLine(18, 40, 18, 160)
+        p.drawLine(18, 40, 30, 40)
+    def _dibujar_cartas(self, p):
+        cx, cy = 215, 195
+        w, h = self._cw, self._ch
+        for k in (3, 2, 1):
+            p.save()
+            p.translate(cx - k * 13, cy - k * 11)
+            p.rotate(-5 - k * 1.2)
+            ruta = self._ruta_corte(-w / 2, -h / 2, w, h)
+            p.setPen(QPen(QColor(215, 50, 70, 90 - k * 20), 1.5))
+            p.setBrush(QColor(120, 15, 35, 26))
+            p.drawPath(ruta)
+            p.restore()
+        p.save()
+        p.translate(cx, cy)
+        p.rotate(-5)
+        x, y = -w / 2, -h / 2
+        ruta = self._ruta_corte(x, y, w, h)
+        p.fillPath(ruta, QColor(30, 4, 10, 235))
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(215, 50, 70, 70), 9))
+        p.drawPath(ruta)
+        p.setPen(QPen(QColor(225, 55, 75), 3))
+        p.drawPath(ruta)
+        fx, fy = int(x + 8), int(y + 8)
+        p.save()
+        p.setClipRect(QRect(fx, fy, self._fw, self._fh))
+        p.drawPixmap(fx, fy, self.face_pm)
+        if self._glitch:
+            p.setOpacity(0.35)
+            p.drawPixmap(fx + 5, fy, self.face_pm)
+            p.setOpacity(1.0)
+            for sy, sh, sdx in self._slices:
+                p.drawPixmap(QRect(fx + sdx, fy + sy, self._fw, sh), self.face_pm, QRect(0, sy, self._fw, sh))
+        p.restore()
+        p.setFont(QFont("Consolas", 9, QFont.Bold))
+        p.setPen(QColor(225, 55, 75))
+        p.drawText(QPointF(x + 10, y + h - 28), "GENGAR // ID_0666")
+        p.setPen(Qt.NoPen)
+        for bx, bw in self._barras:
+            p.setBrush(QColor(215, 50, 70, 170))
+            p.drawRect(QRectF(x + 8 + bx, y + h - 20, bw, 9))
+        for i in range(7):
+            p.fillRect(QRectF(x - 14, y + 30 + i * 16, 5, 5), QColor(215, 50, 70, 170 - i * 20))
+        p.restore()
+    def _dibujar_textos(self, p):
+        x0 = 350
+        p.setFont(QFont("Consolas", 11))
+        p.setPen(QColor(140, 125, 175, 160))
+        p.drawText(QPointF(x0, 116), "GNG_ECTO_000666")
+        fn = QFont("Bahnschrift", 54, QFont.Bold)
+        fn.setLetterSpacing(QFont.AbsoluteSpacing, 4)
+        if self._glitch:
+            self._texto(p, x0, 204, "GENGAR", fn, QColor(200, 40, 60, 150), 0, dx=-5)
+            self._texto(p, x0, 204, "GENGAR", fn, QColor(150, 60, 220, 130), 0, dx=5)
+        self._texto(p, x0, 204, "GENGAR", fn, _I_VERDE_NEON, 1.0)
+        if self._glitch:
+            p.save()
+            p.setClipRect(QRectF(x0 - 20, self._banda, 640, 12))
+            self._texto(p, x0, 204, "GENGAR", fn, QColor(57, 255, 120, 220), 0, dx=14)
+            p.restore()
+        fi = QFont("Bahnschrift", 28, QFont.Bold)
+        fi.setLetterSpacing(QFont.AbsoluteSpacing, 3)
+        col = QColor(215, 48, 68, 255 if self._parpadeo else 170)
+        self._texto(p, x0, 262, "INCOMING CALL", fi, col, 0.9)
+    def _dibujar_botones(self, p):
+        for rect, texto, hover, muesca in (
+            (self.rect_answer, "ANSWER", self._hover == "answer", False),
+            (self.rect_reject, "REJECT", self._hover == "reject", True),
+        ):
+            kx, ky = rect.x() + 6, rect.y() + 8
+            ruta = self._ruta_corte(kx, ky, 54, 54, corte=12)
+            p.fillPath(ruta, QColor(215, 50, 70, 110 if hover else 30))
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(215, 50, 70, 70), 7))
+            p.drawPath(ruta)
+            p.setPen(QPen(_I_ROJO, 2.5))
+            p.drawPath(ruta)
+            p.setFont(QFont("Bahnschrift", 24, QFont.Bold))
+            p.setPen(QColor(255, 255, 255) if hover else _I_ROJO)
+            p.drawText(QRect(kx, ky, 54, 54), Qt.AlignCenter, "T")
+            p.setPen(Qt.NoPen)
+            p.setBrush(_I_ROJO)
+            p.drawEllipse(QPointF(kx + 40, ky + 9), 1.8, 1.8)
+            if muesca:
+                p.drawPolygon(QPolygonF([QPointF(kx + 22, ky + 54), QPointF(kx + 32, ky + 54), QPointF(kx + 27, ky + 62)]))
+            ft = QFont("Bahnschrift", 24, QFont.Bold)
+            ft.setLetterSpacing(QFont.AbsoluteSpacing, 2)
+            self._texto(p, kx + 76, ky + 38, texto, ft, QColor(190, 255, 215) if hover else _I_VERDE_NEON, 1.0 if hover else 0.6)
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        p.save()
+        p.translate(self._gx // 3 if self._glitch else 0, 0)
+        self._dibujar_telefono(p)
+        self._dibujar_cartas(p)
+        self._dibujar_textos(p)
+        self._dibujar_botones(p)
+        p.restore()
+        if self._glitch:
+            p.setPen(Qt.NoPen)
+            for r in self._rects:
+                p.setBrush(QColor(150, 60, 220, 110))
+                p.drawRect(r)
+        p.end()
+class IntroBocadillo(QWidget):
+    def __init__(self, parent, texto):
+        super().__init__(parent)
+        self.texto = texto
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.resize(280, 90)
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        cuerpo = QRectF(4, 4, self.width() - 8, self.height() - 26)
+        path = QPainterPath()
+        path.addRoundedRect(cuerpo, 14, 14)
+        cx = self.width() / 2
+        cola = QPainterPath()
+        cola.moveTo(cx - 12, cuerpo.bottom())
+        cola.lineTo(cx, self.height() - 3)
+        cola.lineTo(cx + 12, cuerpo.bottom())
+        cola.closeSubpath()
+        path = path.united(cola)
+        p.setBrush(QColor(14, 4, 24, 240))
+        p.setPen(QPen(_I_MORADO_NEON, 2))
+        p.drawPath(path)
+        p.setPen(QPen(QColor(57, 255, 120, 80), 1))
+        p.drawRoundedRect(cuerpo.adjusted(5, 5, -5, -5), 10, 10)
+        p.setFont(QFont("Consolas", 16, QFont.Bold))
+        p.setPen(_I_VERDE_NEON)
+        p.drawText(cuerpo.toRect(), Qt.AlignCenter, self.texto)
+        p.end()
+class IntroAnimacion(QWidget):
+    intro_terminada = Signal()
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setCursor(Qt.ArrowCursor)
+        pantalla = QApplication.primaryScreen().geometry()
+        self.ancho = pantalla.width()
+        self.alto = pantalla.height()
+        self.setGeometry(pantalla)
+        self._fase = 1
+        self._cerrando = False
+        self._anim_caida = None
+        self._anim_flotar = None
+        self._anim_salida = None
+        self._timer_espera = None
+        self._alfa_fondo = 1.0
+        self._anim_desv = None
+        self.luna = IntroLuna(self, diametro=150)
+        self.luna.move(self.ancho // 2 - self.luna.width() // 2, 30 - (self.luna.height() - 150) // 2)
+        self.luna.show()
+        self.niebla = IntroNiebla(self, self.ancho, self.alto, 105)
+        self.niebla.move(0, 0)
+        self.niebla.show()
+        self.panel = IntroPanelLlamada(self, RUTA_CARA)
+        self.panel.move((self.ancho - self.panel.width()) // 2, (self.alto - self.panel.height()) // 2 + 70)
+        self.panel.callback_answer = self._responder
+        self.panel.callback_reject = self._rechazar
+        self.panel.show()
+        self.sprite = QLabel(self)
+        self.sprite.setAttribute(Qt.WA_TranslucentBackground)
+        self.sprite.setStyleSheet("background: transparent;")
+        pix = QPixmap(RUTA_SPRITE)
+        if pix.isNull():
+            pix = QPixmap(160, 160)
+            pix.fill(Qt.transparent)
+            q = QPainter(pix)
+            q.setRenderHint(QPainter.Antialiasing)
+            q.setBrush(_I_MORADO_PROFUNDO)
+            q.setPen(QPen(_I_MORADO_NEON, 3))
+            q.drawEllipse(10, 10, 140, 140)
+            q.end()
+        self.sprite.setPixmap(pix)
+        self.sprite.resize(pix.size())
+        self.sprite.move((self.ancho - pix.width()) // 2, -200)
+        self.sprite.hide()
+        self.bocadillo_intro = IntroBocadillo(self, "¿Que pasa tio?")
+        self.bocadillo_intro.hide()
+        self.showFullScreen()
+        self.raise_()
+        self.activateWindow()
+        self.setFocus()
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setOpacity(self._alfa_fondo)
+        p.fillRect(self.rect(), QColor(0, 0, 0))
+        g = QRadialGradient(QPointF(self.ancho / 2, 100), self.ancho * 0.6)
+        g.setColorAt(0.0, QColor(40, 10, 70, 90))
+        g.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(self.rect(), QBrush(g))
+        p.end()
+    def keyPressEvent(self, e):
+        if self._fase == 1 and e.key() == Qt.Key_T:
+            self._responder()
+        elif self._fase == 1 and e.key() == Qt.Key_Escape:
+            self._rechazar()
+        else:
+            super().keyPressEvent(e)
+    def _rechazar(self):
+        if self._fase != 1:
+            return
+        QApplication.quit()
+        sys.exit()
+    def _responder(self):
+        if self._fase != 1:
+            return
+        self._fase = 3
+        self.panel._t_glitch.stop()
+        self.panel._t_parp.stop()
+        self.panel.hide()
+        self.panel.deleteLater()
+        self._iniciar_caida()
+    def _centro_y(self):
+        return (self.alto - self.sprite.height()) // 2
+    def _iniciar_caida(self):
+        x = (self.ancho - self.sprite.width()) // 2
+        self.sprite.move(x, -200)
+        self.sprite.show()
+        self.sprite.raise_()
+        self._anim_caida = QPropertyAnimation(self.sprite, b"pos", self)
+        self._anim_caida.setDuration(1400)
+        self._anim_caida.setStartValue(QPoint(x, -200))
+        self._anim_caida.setEndValue(QPoint(x, self._centro_y()))
+        self._anim_caida.setEasingCurve(QEasingCurve.OutBounce)
+        self._anim_caida.finished.connect(self._al_llegar_centro)
+        self._anim_caida.start()
+    def _al_llegar_centro(self):
+        x = (self.ancho - self.sprite.width()) // 2
+        y = self._centro_y()
+        self._anim_flotar = QPropertyAnimation(self.sprite, b"pos", self)
+        self._anim_flotar.setDuration(2000)
+        self._anim_flotar.setLoopCount(-1)
+        self._anim_flotar.setStartValue(QPoint(x, y))
+        self._anim_flotar.setKeyValueAt(0.5, QPoint(x, y - 28))
+        self._anim_flotar.setEndValue(QPoint(x, y))
+        self._anim_flotar.setEasingCurve(QEasingCurve.InOutSine)
+        self._anim_flotar.start()
+        self._iniciar_desvanecer()
+        bx = x + self.sprite.width() // 2 - self.bocadillo_intro.width() // 2
+        by = y - self.bocadillo_intro.height() - 50
+        self.bocadillo_intro.move(bx, by)
+        self.bocadillo_intro.show()
+        self.bocadillo_intro.raise_()
+        self._timer_espera = QTimer(self)
+        self._timer_espera.setSingleShot(True)
+        self._timer_espera.timeout.connect(self._iniciar_salida)
+        self._timer_espera.start(3000)
+    def _iniciar_desvanecer(self):
+        self._anim_desv = QVariantAnimation(self)
+        self._anim_desv.setDuration(2800)
+        self._anim_desv.setStartValue(1.0)
+        self._anim_desv.setEndValue(0.0)
+        self._anim_desv.setEasingCurve(QEasingCurve.InOutQuad)
+        self._anim_desv.valueChanged.connect(self._set_desvanecer)
+        self._anim_desv.start()
+    def _set_desvanecer(self, v):
+        v = float(v)
+        self._alfa_fondo = v
+        self.luna.alfa = v
+        self.niebla.alfa = v
+        self.update()
+    def _iniciar_salida(self):
+        if self._anim_flotar is not None:
+            self._anim_flotar.stop()
+        self.bocadillo_intro.hide()
+        inicio = self.sprite.pos()
+        self._anim_salida = QPropertyAnimation(self.sprite, b"pos", self)
+        self._anim_salida.setDuration(450)
+        self._anim_salida.setStartValue(inicio)
+        self._anim_salida.setEndValue(QPoint(inicio.x(), self.alto))
+        self._anim_salida.setEasingCurve(QEasingCurve.InCubic)
+        self._anim_salida.finished.connect(self._terminar)
+        self._anim_salida.start()
+    def _terminar(self):
+        if self._cerrando:
+            return
+        self._cerrando = True
+        self.luna._timer.stop()
+        self.niebla._timer.stop()
+        self.close()
+        self.intro_terminada.emit()
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     cfg = cargar_config()
-    snd = Sonido()
-    fx = FxOverlay()
-    chat_window = VentanaChatCyberdeck()
-    pet_window = PetGengar(chat_window, fx, snd, cfg)
-    def mostrar_chat():
-        chat_window.show()
-        chat_window.raise_()
-        chat_window.activateWindow()
-    chat_window.mensaje_enviado.connect(pet_window.recibir_mensaje)
-    pet_window.respuesta_para_chat.connect(lambda t: chat_window.agregar_mensaje("Gengar", t))
-    pet_window.respuesta_para_chat.connect(lambda t: chat_window.detener_typing())
-    pet_window.abrir_chat.connect(mostrar_chat)
-    def accion_chat(a):
-        mapeo = {"bola": "bola_fantasma"}
-        pet_window.ejecutar(mapeo.get(a, a))
-    chat_window.accion_rapida.connect(accion_chat)
-    puente = Puente(PUERTO)
-    puente.evento.connect(pet_window.evento_claude)
-    if not puente.iniciar():
-        print(f"[Gengar] El puerto {PUERTO} esta ocupado: ¿ya hay otro Gengar abierto?")
-    atajo = FiltroAtajo(pet_window.alternar_guardado)
-    app.installNativeEventFilter(atajo)
-    app.aboutToQuit.connect(atajo.liberar)
-    app.aboutToQuit.connect(puente.parar)
-    tray = crear_tray(app, pet_window, mostrar_chat)
-    pet_window.show()
+    refs = {}
+    def iniciar_mascota():
+        snd = Sonido()
+        fx = FxOverlay()
+        chat_window = VentanaChatCyberdeck()
+        pet_window = PetGengar(chat_window, fx, snd, cfg)
+        def mostrar_chat():
+            chat_window.show()
+            chat_window.raise_()
+            chat_window.activateWindow()
+        chat_window.mensaje_enviado.connect(pet_window.recibir_mensaje)
+        pet_window.respuesta_para_chat.connect(lambda t: chat_window.agregar_mensaje("Gengar", t))
+        pet_window.respuesta_para_chat.connect(lambda t: chat_window.detener_typing())
+        pet_window.abrir_chat.connect(mostrar_chat)
+        def accion_chat(a):
+            mapeo = {"bola": "bola_fantasma"}
+            pet_window.ejecutar(mapeo.get(a, a))
+        chat_window.accion_rapida.connect(accion_chat)
+        puente = Puente(PUERTO)
+        puente.evento.connect(pet_window.evento_claude)
+        if not puente.iniciar():
+            print(f"[Gengar] El puerto {PUERTO} esta ocupado: ¿ya hay otro Gengar abierto?")
+        atajo = FiltroAtajo(pet_window.alternar_guardado)
+        app.installNativeEventFilter(atajo)
+        app.aboutToQuit.connect(atajo.liberar)
+        app.aboutToQuit.connect(puente.parar)
+        tray = crear_tray(app, pet_window, mostrar_chat)
+        x_caida = intro.sprite.x() + intro.sprite.width() // 2 - W // 2
+        min_x, max_x, suelo = pet_window.limites(SINK_PIE)
+        pet_window.move(max(min_x, min(max_x, x_caida)), suelo)
+        pet_window.show()
+        refs.update(snd=snd, fx=fx, chat=chat_window, pet=pet_window, puente=puente, atajo=atajo, tray=tray)
+    intro = IntroAnimacion()
+    intro.intro_terminada.connect(iniciar_mascota)
     sys.exit(app.exec())
