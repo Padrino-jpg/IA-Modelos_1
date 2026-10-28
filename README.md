@@ -1,1 +1,1 @@
-![Mi Captura](screenshot.png)
+![Mi Captura](GENGAR.png)
