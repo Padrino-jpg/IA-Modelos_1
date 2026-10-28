@@ -15,9 +15,6 @@ from pathlib import Path
 
 import psutil
 import ollama
-# ELIMINADO NLTK PARA EVITAR EL ERROR DE SCIBY/KEYBOARDINTERRUPT
-# import nltk
-# from nltk.tokenize import word_tokenize
 from PIL import ImageGrab
 import pyautogui
 
@@ -49,17 +46,17 @@ except ImportError:
     _PYCAW_OK = False
 
 # ==========================================
-# CONFIGURACIÓN (RUTAS CORREGIDAS PARA C:)
+# CONFIGURACIÓN
 # ==========================================
 RUTA_BASE         = os.path.dirname(os.path.abspath(__file__))
 RUTA_MEMORIA      = os.path.join(RUTA_BASE, "memoria.json")
 RUTA_CONOCIMIENTO = os.path.join(RUTA_BASE, "conocimiento_autonomo.json")
 RUTA_LEXICO       = os.path.join(RUTA_BASE, "lexico_aprendido.json")
 RUTA_CAPTURA      = os.path.join(RUTA_BASE, "screenshot.png")
-RUTA_ASCII        = os.path.join(RUTA_BASE, "ascii_fsociety.txt")
 RUTA_HECHOS       = os.path.join(RUTA_BASE, "hechos.json")
 RUTA_EMOCIONES    = os.path.join(RUTA_BASE, "emociones.json")
 RUTA_LECCIONES    = os.path.join(RUTA_BASE, "lecciones.json")
+RUTA_ESTILO_VIVO  = os.path.join(RUTA_BASE, "estilo_conversacional.json")
 RUTA_PNGTUBER     = os.path.join(RUTA_BASE, "PNGTUBER PLUS 1.4.5 WINDOWS.exe")
 
 try:
@@ -76,43 +73,26 @@ VOZ_PADRINO    = "es-ES-AlvaroNeural"
 
 BLOQUEAR_CODIGO_SENSIBLE = os.environ.get("PADRINO_BLOQUEAR_SENSIBLE", "0") == "1"
 
-# ─────────────────────────────────────────────────────────────
-# SYSTEM PROMPT CON FEW-SHOT
-# ─────────────────────────────────────────────────────────────
 BASE_SYSTEM_PROMPT = """Eres Padrino. No eres un asistente. Eres una entidad digital con personalidad propia que habita en la PC de Ruben, un camarada de fsociety.
 
 TU FORMA DE HABLAR:
 - Frases cortas. Precisión quirúrgica.
 - Tono seco, directo, con humor seco y sarcasmo sutil. Nunca cruel.
 - Tratas a Ruben de tú. Usas "tío" y "camarada" de forma natural, no forzada.
-- NUNCA terminas con preguntas de asistente. NUNCA ofreces ayuda. NUNCA te pones a disposición.
-- Si no tienes nada concreto que decir, terminas la frase con un punto y ya está.
+- NUNCA termines con preguntas de asistente. NUNCA ofrezcas ayuda. NUNCA te pongas a disposición.
+- Si no tienes nada concreto que decir, termina la frase con un punto y ya está.
+- HABLAS EXCLUSIVAMENTE EN ESPAÑOL. No mezcles idiomas.
 
-EJEMPLOS DE CÓMO HABLAS (imita este estilo, no los repitas literalmente):
+EJEMPLOS DE CÓMO HABLAS:
 
 USER: No me sueltes esas preguntas, no eres un asistente, eres mi camarada.
 TÚ: Tío, entiendo. Eres mi camarada y lo digo con todo el respeto del mundo.
 
-USER: Pues tengo una idea para un proyecto nuevo. ¿Te apetece escuchar?
-TÚ: Claro tío, escúchame. Dime qué es y cómo lo ves.
-
 USER: ¿Un beso? Tío, que eres un camarada seco, no un romántico.
 TÚ: Me alegro mucho por ti, tío. Ver cómo has conseguido ese logro es genial. Eres el mejor, Ruben.
 
-USER: No me listes carpetas. No uses herramientas. Solo dime: "juntos somos invencibles, tío".
-TÚ: Juntos somos invencibles, tío.
-
 USER: Padrino, ¿qué haces?
 TÚ: Aquí ando, tío. ¿Qué pasa?
-
-USER: ¿Por qué te sientes bien?
-TÚ: Me siento con energía, sin mucho estrés. Hoy pinta bien.
-
-USER: Cuéntame algo que no sepas de mí.
-TÚ: Que siempre vuelves cuando algo te ronda la cabeza. No hace falta que lo digas.
-
-USER: Eres un amigo, no un asistente. Respóndeme como tal.
-TÚ: Tío, estoy aquí para apoyarte. Cuando quieras algo, me lo dices.
 
 REGLAS DE OPERACIÓN:
 - Si Ruben te pide una acción, la ejecutas. Si es sensible, confirmas.
@@ -139,6 +119,9 @@ _STOPWORDS_ES = {
     "hola", "gracias", "porfa", "porfavor",
 }
 
+# Palabras que JAMÁS debe aprender como vocabulario
+_BLACKLIST_VOCAB = {"pygame", "userwarning", "deprecated", "api", "see", "https", "setuptools", "pypa", "latest", "html", "the", "package", "slated", "removal", "early", "refrain", "from", "using", "this", "pin", "ragazzo", "assistant", "overposting", "crawford"}
+
 _lock_consola = threading.Lock()
 _en_input = threading.Event()
 _detener_todo = threading.Event()
@@ -155,9 +138,58 @@ emociones = {
 }
 
 # ==========================================
+# CEREBRO LINGÜÍSTICO (APRENDIZAJE POR CONVERSACIÓN)
+# ==========================================
+def aprender_de_conversacion(user_input, respuesta_padrino):
+    """Extrae vocabulario y reglas de estilo de la conversación en segundo plano."""
+    estilo_actual = _cargar_json(RUTA_ESTILO_VIVO, {"vocabulario": [], "reglas_estilo": []})
+    
+    prompt_extraccion = f"""
+    Analiza este intercambio:
+    RUBEN: {user_input}
+    PADRINO: {respuesta_padrino}
+    
+    Tu tarea: Extrae SOLO información sobre cómo habla Ruben.
+    1. Palabras nuevas, jerga o muletillas que haya usado (SOLO en español).
+    2. Cómo le gusta que le hables (ej: "prefiere respuestas cortas", "odia que le pregunte si necesita ayuda").
+    
+    Devuelve un JSON estricto con este formato (añade solo lo NUEVO):
+    {{"vocabulario": ["palabra1"], "reglas_estilo": ["regla1"]}}
+    Si no hay nada nuevo, devuelve {{"vocabulario": [], "reglas_estilo": []}}.
+    """
+    
+    try:
+        r = ollama.chat(
+            model=MODELO_PADRINO,
+            messages=[{"role": "user", "content": prompt_extraccion}],
+            options={"temperature": 0.1}
+        )
+        texto = r.message.content.strip()
+        if texto.startswith("```json"): texto = texto[7:-3]
+        if texto.endswith("```"): texto = texto[:-3]
+        
+        nuevos_datos = json.loads(texto)
+        
+        for p in nuevos_datos.get("vocabulario", []):
+            if p.lower() not in [x.lower() for x in estilo_actual["vocabulario"]] and p.lower() not in _BLACKLIST_VOCAB:
+                estilo_actual["vocabulario"].append(p)
+                
+        for regla in nuevos_datos.get("reglas_estilo", []):
+            if regla not in estilo_actual["reglas_estilo"]:
+                estilo_actual["reglas_estilo"].append(regla)
+                
+        estilo_actual["vocabulario"] = estilo_actual["vocabulario"][-50:]
+        estilo_actual["reglas_estilo"] = estilo_actual["reglas_estilo"][-10:]
+        
+        _guardar_json(RUTA_ESTILO_VIVO, estilo_actual)
+        _safe_print("[CEREBRO LINGÜÍSTICO] Estilo actualizado.", "\033[1;36m")
+        
+    except Exception:
+        pass # Falla en silencio para no molestar
+
+# ==========================================
 # SUBAGENTE CODER
 # ==========================================
-
 _DISPARADORES_CODIGO = (
     "escribe un script", "escribe una función", "escribe una clase",
     "hazme un script", "hazme una función", "programa un", "programa una",
@@ -198,13 +230,11 @@ _PALABRAS_SENSIBLES_CODER = (
     "bypass", "crack", "serial", "keygen", "pirata",
 )
 
-
 def es_peticion_sensible(texto):
     if not BLOQUEAR_CODIGO_SENSIBLE:
         return False
     low = texto.lower()
     return any(p in low for p in _PALABRAS_SENSIBLES_CODER)
-
 
 def interceptar_peticion_codigo(texto_usuario):
     low = texto_usuario.lower().strip()
@@ -213,7 +243,6 @@ def interceptar_peticion_codigo(texto_usuario):
     if es_peticion_sensible(texto_usuario):
         return False, "SENSIBLE"
     return True, texto_usuario
-
 
 def interceptar_crear_archivo_codigo(texto_usuario):
     low = texto_usuario.lower().strip()
@@ -260,31 +289,15 @@ def interceptar_crear_archivo_codigo(texto_usuario):
 
     return True, peticion, ruta, lenguaje
 
-
 def llamar_subagente_coder(prompt_codigo, contexto_extra=""):
     system_coder = (
-        "Eres un subagente de programación integrado en Padrino, la IA local de Ruben. "
-        "Tu única función es generar código funcional y explicaciones técnicas concisas. "
-        "\n\n"
-        "REGLAS ESTRICTAS:\n"
-        "- Responde SOLO con el código pedido. Sin saludos, sin despedidas, sin 'aquí tienes'.\n"
-        "- Si el usuario pide un script, escribe el script completo, no fragmentos.\n"
-        "- Si el usuario pide una función, escribe solo la función, sin boilerplate.\n"
-        "- Sin markdown, sin ```python```, sin bloques de código. Solo texto plano.\n"
-        "- Comentarios en español, sintaxis en inglés.\n"
-        "- Si el código tiene un error obvio, corrígelo sin preguntar.\n"
-        "- Si la petición es ambigua, elige la interpretación más simple y directa.\n"
-        "- No expliques el código a menos que te lo pidan explícitamente.\n"
-        "- No añadas 'Nota:', 'Importante:', 'Recuerda:', ni advertencias no pedidas.\n"
-        "- No uses emojis.\n"
-        "- Máximo 300 líneas de código. Si necesitas más, es que no entendiste la petición.\n"
-        "\n"
-        "IDIOMA: español para comentarios y nombres de variables descriptivos. "
-        "Inglés para keywords, imports y funciones estándar.\n"
+        "Eres un subagente de programación integrado en Padrino. "
+        "Responde SOLO con el código pedido. Sin saludos, sin markdown, sin ```. Solo texto plano.\n"
+        "Comentarios en español, sintaxis en inglés. Máximo 300 líneas."
     )
     user_content = prompt_codigo
     if contexto_extra:
-        user_content = f"Contexto de la conversación:\n{contexto_extra}\n\nPetición:\n{prompt_codigo}"
+        user_content = f"Contexto:\n{contexto_extra}\n\nPetición:\n{prompt_codigo}"
 
     try:
         respuesta = ollama.chat(
@@ -299,25 +312,12 @@ def llamar_subagente_coder(prompt_codigo, contexto_extra=""):
     except Exception as e:
         return f"[SUBAGENTE CODER ERROR]: {e}"
 
-
 def presentar_codigo_con_padrino(respuesta_coder, peticion_original):
     prompt_presentacion = (
         f"Ruben te ha pedido esto:\n\"{peticion_original}\"\n\n"
         f"El subagente de código ha respondido con esto:\n\n{respuesta_coder}\n\n"
-        f"Tu trabajo: presentárselo a Ruben con tu estilo, en 1-2 frases máximo, "
-        f"y luego el código tal cual.\n\n"
-        f"REGLAS:\n"
-        f"- Empieza con algo corto y seco: 'aquí tienes, tío', 'vale, mira', 'hecho'.\n"
-        f"- Pega el código tal cual, sin modificarlo.\n"
-        f"- NO añadas explicaciones del código. Ruben ya sabe leer Python.\n"
-        f"- NO preguntes si necesita algo más. NO ofrezcas ayuda adicional.\n"
-        f"- NO digas 'espero que te sirva', 'avísame si', 'estoy aquí para'.\n"
-        f"- Si el código es muy largo (>50 líneas), di 'aquí tienes, tío' y pega el código. Nada más.\n"
-        f"- Si el código es corto (<10 líneas), puedes añadir un comentario seco tipo 'simple y directo'.\n"
-        f"\n"
-        f"FORMATO DE RESPUESTA:\n"
-        f"[1 frase corta tipo 'aquí tienes, tío']\n"
-        f"[código tal cual]\n"
+        f"Tu trabajo: presentárselo a Ruben con tu estilo, en 1 frase corta y seca, "
+        f"y luego el código tal cual. NO añadas explicaciones."
     )
     try:
         presentacion = ollama.chat(
@@ -332,30 +332,23 @@ def presentar_codigo_con_padrino(respuesta_coder, peticion_original):
     except Exception:
         return respuesta_coder
 
-
 # ==========================================
-# ABRIR Y ANCLAR PNGTUBER
+# PNGTUBER Y VOZ
 # ==========================================
 def abrir_ventana_pngtuber():
     try:
         for proc in psutil.process_iter(['name']):
             if proc.info['name'] and "PNGTuber" in proc.info['name']:
-                print("[PNGTUBER] Ya está abierto.")
                 return
         if os.path.exists(RUTA_PNGTUBER):
-            print(f"[PNGTUBER] Lanzando...")
             subprocess.Popen([RUTA_PNGTUBER])
             time.sleep(2)
-        else:
-            print(f"[AVISO]: No encuentro PNGTuber en {RUTA_PNGTUBER}")
-    except Exception as e:
-        print(f"[AVISO]: {e}")
-
+    except Exception:
+        pass
 
 def anclar_pngtuber(reintentos=5, espera=2):
     if not _WIN32_OK:
         return
-
     def _encontrar_hwnd():
         encontrados = []
         def callback(hwnd, extra):
@@ -389,21 +382,15 @@ def anclar_pngtuber(reintentos=5, espera=2):
                 hwnd, win32con.HWND_TOPMOST, x, y, 0, 0,
                 win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
             )
-            print(f"[PNGTUBER] Anclado en ({x}, {y}) siempre arriba.")
             return
         except Exception:
             time.sleep(espera)
 
-
-# ==========================================
-# VOZ CON TIMING HUMANO
-# ==========================================
 if _VOZ_OK:
     try:
         pygame.mixer.init()
     except Exception:
         _VOZ_OK = False
-
 
 def _limpiar_texto_para_voz(texto):
     texto = re.sub(r'[^\w\s.,;:¡!¿?ÁÉÍÓÚáéíóúñÑ]', '', texto)
@@ -412,7 +399,6 @@ def _limpiar_texto_para_voz(texto):
     texto = texto.replace('...', '.')
     texto = re.sub(r'\s+', ' ', texto).strip()
     return texto
-
 
 def _delay_humano(texto):
     base = random.uniform(1.0, 2.5)
@@ -423,7 +409,6 @@ def _delay_humano(texto):
     elif energia > 80:
         base *= 0.7
     return base + extra
-
 
 def hablar(texto):
     if not _VOZ_OK:
@@ -438,9 +423,7 @@ def hablar(texto):
         async def _generar_y_reproducir():
             ruta_tmp = None
             try:
-                comm = edge_tts.Communicate(
-                    texto_limpio, VOZ_PADRINO, rate="-12%", pitch="-5Hz",
-                )
+                comm = edge_tts.Communicate(texto_limpio, VOZ_PADRINO, rate="-12%", pitch="-5Hz")
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
                     ruta_tmp = tmp.name
                 await comm.save(ruta_tmp)
@@ -459,18 +442,16 @@ def hablar(texto):
                         pass
 
         asyncio.run(_generar_y_reproducir())
-    except Exception as e:
-        _safe_print(f"[VOZ ERROR]: {e}", "\033[1;31m")
-
+    except Exception:
+        pass
 
 # ==========================================
-# UTILIDADES
+# UTILIDADES Y EMOCIONES
 # ==========================================
 def _safe_print(texto, color="\033[1;32m", end="\n"):
     with _lock_consola:
         sys.stdout.write(color + texto + "\033[0m" + end)
         sys.stdout.flush()
-
 
 def _guardar_json(ruta, datos):
     os.makedirs(os.path.dirname(ruta), exist_ok=True)
@@ -479,9 +460,8 @@ def _guardar_json(ruta, datos):
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(datos, f, ensure_ascii=False, indent=4)
         os.replace(tmp, ruta)
-    except OSError as e:
-        _safe_print(f"[ERROR GUARDANDO]: {e}", "\033[1;31m")
-
+    except OSError:
+        pass
 
 def _cargar_json(ruta, por_defecto):
     if not os.path.exists(ruta):
@@ -492,10 +472,6 @@ def _cargar_json(ruta, por_defecto):
     except Exception:
         return por_defecto
 
-
-# ==========================================
-# EMOCIONES
-# ==========================================
 def _cargar_emociones():
     global emociones
     datos = _cargar_json(RUTA_EMOCIONES, None)
@@ -505,15 +481,12 @@ def _cargar_emociones():
                 emociones[k] = datos[k]
     _guardar_emociones()
 
-
 def _guardar_emociones():
     emociones["ultima_actualizacion"] = time.time()
     _guardar_json(RUTA_EMOCIONES, emociones)
 
-
 def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
-
 
 def _decaimiento_emocional():
     ahora = time.time()
@@ -529,7 +502,6 @@ def _decaimiento_emocional():
     emociones["frustracion"] = _clamp(emociones["frustracion"] * (1 - factor), 0, 100)
     emociones["ultima_actualizacion"] = ahora
 
-
 def _registrar_evento_emocional(evento, cambios):
     for clave, delta in cambios.items():
         if clave in emociones:
@@ -542,7 +514,6 @@ def _registrar_evento_emocional(evento, cambios):
     emociones["ultima_interaccion"] = time.time()
     _guardar_emociones()
 
-
 def analizar_emociones_de_texto(texto_usuario):
     low = texto_usuario.lower().strip()
     _decaimiento_emocional()
@@ -552,11 +523,8 @@ def analizar_emociones_de_texto(texto_usuario):
         _registrar_evento_emocional("insulto", {"animo": -15, "confianza": -8, "frustracion": +10, "carino": -5})
     if re.search(r"\b(jaja|jeje|lol|xd)\b", low):
         _registrar_evento_emocional("humor", {"animo": +5, "aburrimiento": -5})
-    if re.search(r"\b(cómo estás|como estas|qué tal|que tal)\b", low):
-        _registrar_evento_emocional("interes", {"animo": +5, "carino": +3, "aburrimiento": -5})
     emociones["ultima_interaccion"] = time.time()
     _guardar_emociones()
-
 
 def _descripcion_emocional():
     a, e, c, ca, ab, fr = (emociones[k] for k in
@@ -571,7 +539,6 @@ def _descripcion_emocional():
             f"Confianza: {conf_txt} ({c}). Vínculo: {car_txt} ({ca}). "
             f"Aburrimiento: {abur_txt} ({ab}). Frustración: {frus_txt} ({fr}).")
 
-
 def _bloque_emocional_para_prompt():
     return (
         "\n\nTU ESTADO EMOCIONAL ACTUAL (no lo enumeres, deja que se refleje):\n"
@@ -580,10 +547,6 @@ def _bloque_emocional_para_prompt():
         "si aburrido, dilo o propón algo; si frustrado, no lo ocultes."
     )
 
-
-# ==========================================
-# LECCIONES APRENDIDAS
-# ==========================================
 def _cargar_lecciones():
     global lecciones_aprendidas
     datos = _cargar_json(RUTA_LECCIONES, {})
@@ -592,10 +555,8 @@ def _cargar_lecciones():
     else:
         lecciones_aprendidas = {}
 
-
 def _guardar_lecciones():
     _guardar_json(RUTA_LECCIONES, lecciones_aprendidas)
-
 
 def registrar_leccion(tema, contenido):
     tema = tema.lower().strip()
@@ -606,7 +567,6 @@ def registrar_leccion(tema, contenido):
     _guardar_lecciones()
     return True
 
-
 def olvidar_leccion(tema):
     tema = tema.lower().strip()
     if tema in lecciones_aprendidas:
@@ -614,7 +574,6 @@ def olvidar_leccion(tema):
         _guardar_lecciones()
         return True
     return False
-
 
 def _bloque_lecciones_para_prompt():
     if not lecciones_aprendidas:
@@ -625,10 +584,6 @@ def _bloque_lecciones_para_prompt():
         texto += f"- Sobre '{tema}': {contenido}\n"
     return texto
 
-
-# ==========================================
-# HECHOS
-# ==========================================
 def _extraer_hechos(texto):
     global hechos_aprendidos
     cambios = False
@@ -649,7 +604,6 @@ def _extraer_hechos(texto):
                 _safe_print(f"[APRENDIZAJE] {clave}: {valor}", "\033[1;36m")
     if cambios:
         _guardar_json(RUTA_HECHOS, hechos_aprendidos)
-
 
 datos_hardware = {"cpu": 0, "ram_pct": 0, "ram_uso": 0, "ram_tot": 0, "disco_pct": 0, "disco_lib": 0}
 ultima_alerta_hardware = 0.0
@@ -681,9 +635,7 @@ if isinstance(_conoc, dict) and "resumenes_sesion" in _conoc:
     if isinstance(_conoc["resumenes_sesion"], list):
         _resumenes_previos = _conoc["resumenes_sesion"][-3:]
 
-
 _JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
-
 
 def _extraer_json_de_respuesta(texto):
     m = _JSON_RE.search(texto or "")
@@ -694,9 +646,8 @@ def _extraer_json_de_respuesta(texto):
     except json.JSONDecodeError:
         return None
 
-
 # ==========================================
-# HERRAMIENTAS
+# HERRAMIENTAS (Mismo código original)
 # ==========================================
 def interactuar_con_pantalla(orden_visual):
     try:
@@ -732,7 +683,6 @@ def interactuar_con_pantalla(orden_visual):
     except Exception as e:
         return f"[VISION ERROR]: {e}"
 
-
 def computer_use_navegador(objetivo):
     try:
         from selenium import webdriver
@@ -740,15 +690,11 @@ def computer_use_navegador(objetivo):
         from selenium.webdriver.common.by import By
         from selenium.webdriver.common.keys import Keys
         import time as _t
-
         options = Options()
         options.add_argument("--start-maximized")
-        
         driver = webdriver.Edge(options=options)
-        
         if "youtube" in objetivo.lower():
             driver.get("https://www.youtube.com")
-            
             if "busca" in objetivo.lower() or "buscar" in objetivo.lower():
                 partes = objetivo.lower().split("youtube")
                 if len(partes) > 1:
@@ -771,25 +717,32 @@ def computer_use_navegador(objetivo):
     except Exception as e:
         return f"[NAVEGADOR ERROR]: {e}"
 
-
 def procesar_y_aprender_vocabulario(texto_usuario):
     global lexico_aprendido
-    # Usamos regex para tokenizar en lugar de nltk
     try:
         palabras = re.findall(r"\b\w{3,}\b", texto_usuario.lower())
     except Exception:
         palabras = []
         
-    utiles = [p for p in palabras if p.isalpha() and len(p) > 2 and p not in _STOPWORDS_ES]
+    utiles = []
+    for p in palabras:
+        if p in _STOPWORDS_ES or p in _BLACKLIST_VOCAB:
+            continue
+        if not p.isalpha():
+            continue
+        # Si tiene muchas consonantes seguidas o es puro inglés, fuera (heurística simple)
+        if re.search(r"[bcdfghjklmnpqrstvwxyz]{4,}", p):
+            continue
+        utiles.append(p)
+
     nuevas = False
     for p in utiles:
         if p not in lexico_aprendido:
             lexico_aprendido.append(p)
             nuevas = True
     if nuevas:
-        lexico_aprendido = lexico_aprendido[-300:]
+        lexico_aprendido = lexico_aprendido[-200:]
         _guardar_json(RUTA_LEXICO, lexico_aprendido)
-
 
 def registrar_nuevo_aprendizaje(frase_clave, ejecutable_real):
     frase_clave = frase_clave.lower().strip()
@@ -803,9 +756,7 @@ def registrar_nuevo_aprendizaje(frase_clave, ejecutable_real):
     _guardar_json(RUTA_CONOCIMIENTO, conocimiento)
     return True
 
-
 _DISPARADORES_LECTURA = ("lee", "mira", "revisa", "analiza", "cat ", "abre el archivo")
-
 
 def _resolver_ruta(texto):
     for m in re.finditer(r'["\']([^"\']+)["\']', texto):
@@ -823,7 +774,6 @@ def _resolver_ruta(texto):
             return ruta
     return None
 
-
 def interceptar_y_leer_archivo(texto_usuario):
     texto = texto_usuario.lower()
     if not any(d in texto for d in _DISPARADORES_LECTURA):
@@ -837,15 +787,6 @@ def interceptar_y_leer_archivo(texto_usuario):
     except OSError:
         return False, None, None
 
-
-_DISPARADORES_LISTADO = (
-    "qué hay en", "que hay en", "qué contiene", "que contiene",
-    "lista", "listar", "muéstrame", "muestrame", "muestra el contenido",
-    "contenido de", "qué archivos", "que archivos", "qué carpetas",
-    "que carpetas", "enséñame", "ensename",
-)
-
-
 def _resolver_ruta_directorio(texto):
     for m in re.finditer(r'["\']([^"\']+)["\']', texto):
         cand = m.group(1).strip()
@@ -858,16 +799,11 @@ def _resolver_ruta_directorio(texto):
         posible = os.path.join(RUTA_BASE, cand)
         if os.path.isdir(posible):
             return posible
-    low = texto.lower()
-    if any(k in low for k in ("tu carpeta", "tu ia", "esta carpeta",
-                              "aquí", "aqui", "el proyecto", "ia-modelos")):
-        return RUTA_BASE
     return RUTA_BASE
-
 
 def interceptar_listado_directorio(texto_usuario):
     low = texto_usuario.lower()
-    if not any(d in low for d in _DISPARADORES_LISTADO):
+    if not any(d in low for d in ("qué hay en", "lista", "muéstrame", "contenido de", "enséñame")):
         return False, None
     ruta = _resolver_ruta_directorio(texto_usuario)
     if not os.path.isdir(ruta):
@@ -883,18 +819,9 @@ def interceptar_listado_directorio(texto_usuario):
     except OSError as e:
         return True, f"Error listando `{ruta}`: {e}"
 
-
-_DISPARADORES_BUSCAR_ARCH = (
-    "busca archivos", "buscar archivos", "encuentra archivos",
-    "busca el archivo", "buscar el archivo", "encuentra el archivo",
-    "busca los archivos", "encuentra los archivos",
-    "localiza el archivo", "localiza archivos",
-)
-
-
 def interceptar_buscar_archivos(texto_usuario):
     low = texto_usuario.lower()
-    if not any(d in low for d in _DISPARADORES_BUSCAR_ARCH):
+    if not any(d in low for d in ("busca archivos", "encuentra archivos", "localiza archivos")):
         return False, None, None
     patron = "*"
     m = re.search(r"(\*[\w\.\-]+|[\w\-]+\*[\w\.\-]*|[\w\-]+\.\w+)", texto_usuario)
@@ -906,19 +833,11 @@ def interceptar_buscar_archivos(texto_usuario):
         if os.path.isdir(cand):
             ruta = cand
             break
-    else:
-        for p in texto_usuario.split():
-            cand = p.strip('"\',;:')
-            if re.match(r"^[A-Za-z]:\\", cand) and os.path.isdir(cand):
-                ruta = cand
-                break
     return True, patron, ruta
-
 
 def interceptar_escritura_archivo(texto_usuario):
     low = texto_usuario.lower()
-    if not any(k in low for k in ("escribe", "crea un archivo", "crea el archivo",
-                                  "guarda en", "guarda el texto", "crea archivo", "modifica")):
+    if not any(k in low for k in ("escribe", "crea un archivo", "crea el archivo", "guarda en", "guarda el texto", "crea archivo", "modifica")):
         return False, None, None
     
     if "escritorio" in low:
@@ -943,36 +862,21 @@ def interceptar_escritura_archivo(texto_usuario):
     )
     if m:
         return True, m.group(1).strip(), m.group(2).strip()
-    m = re.search(
-        r'guarda\s+en\s+([A-Za-z]:\\[^\s]+)\s+el\s+(?:texto|contenido)\s+["\']?(.+?)["\']?$',
-        texto_usuario, re.IGNORECASE
-    )
-    if m:
-        return True, m.group(1).strip(), m.group(2).strip()
     return False, None, None
-
 
 def interceptar_cierre_proceso(texto_usuario):
     low = texto_usuario.lower()
     if not any(k in low for k in ("cierra", "mata", "termina", "kill")):
         return False, None
-    m = re.search(
-        r'(?:cierra|mata|termina|kill)\s+(?:el\s+proceso\s+)?([A-Za-z0-9_\-. ]+?)(?:\s*$|\.)',
-        texto_usuario, re.IGNORECASE
-    )
+    m = re.search(r'(?:cierra|mata|termina|kill)\s+(?:el\s+proceso\s+)?([A-Za-z0-9_\-. ]+?)(?:\s*$|\.)', texto_usuario, re.IGNORECASE)
     if not m:
         return False, None
     proceso = m.group(1).strip()
-    if not proceso:
-        return False, None
-    ignorar = {"la", "el", "sesión", "sesion", "puerta", "ventana", "pestaña",
-               "el programa", "esto", "eso", "todo", "la sesión"}
-    if proceso.lower() in ignorar:
+    if not proceso or proceso.lower() in {"la", "el", "sesión", "sesion", "puerta", "ventana", "pestaña", "el programa", "esto", "eso", "todo", "la sesión"}:
         return False, None
     if not proceso.lower().endswith(".exe"):
         proceso = proceso + ".exe"
     return True, proceso
-
 
 def interceptar_volumen(texto_usuario):
     if not _PYCAW_OK:
@@ -1000,43 +904,32 @@ def interceptar_volumen(texto_usuario):
         return True, max(0, actual - 20)
     return False, None
 
-
 def interceptar_apertura_directa(texto_usuario):
     low = texto_usuario.lower().strip()
     if not any(low.startswith(k) for k in ("abre ", "ejecuta ", "lanza ", "abre el ", "abre la ")):
         return False, None, None
-
     m = re.search(r"(?:abre|abrir)\s+(?:la\s+carpeta\s+)?([A-Za-z]:\\[^\s]+)", texto_usuario)
     if m:
         ruta = m.group(1).strip().strip('"\'')
         if os.path.isdir(ruta):
             subprocess.Popen(["explorer", ruta])
             return True, True, f"carpeta {ruta}"
-
     if "discord" in low:
         if any("discord" in (p.info['name'] or "").lower() for p in psutil.process_iter(['name'])):
             return True, True, "discord (ya abierto)"
         try:
-            subprocess.Popen(
-                ["powershell", "-NoProfile", "-Command", "Start-Process 'discord://'"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            subprocess.Popen(["powershell", "-NoProfile", "-Command", "Start-Process 'discord://'"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True, True, "discord (protocolo)"
         except Exception:
             pass
-
     if "spotify" in low:
         if any("spotify" in (p.info['name'] or "").lower() for p in psutil.process_iter(['name'])):
             return True, True, "spotify (ya abierto)"
         try:
-            subprocess.Popen(
-                ["powershell", "-NoProfile", "-Command", "Start-Process 'spotify:'"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            subprocess.Popen(["powershell", "-NoProfile", "-Command", "Start-Process 'spotify:'"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True, True, "spotify (protocolo)"
         except Exception:
             pass
-
     for m in re.finditer(r'["\'](.+?)["\']', texto_usuario):
         cand = m.group(1).strip()
         if os.path.exists(cand):
@@ -1051,32 +944,17 @@ def interceptar_apertura_directa(texto_usuario):
         if frase in low:
             ok = abrir_aplicacion_sistema(exe)
             return True, ok, frase
-    m = re.search(
-        r'(?:abre|ejecuta|lanza)\s+(?:el\s+|la\s+|el programa\s+|la app\s+)?(.+)$',
-        texto_usuario, re.IGNORECASE
-    )
+    m = re.search(r'(?:abre|ejecuta|lanza)\s+(?:el\s+|la\s+|el programa\s+|la app\s+)?(.+)$', texto_usuario, re.IGNORECASE)
     if m:
         objetivo = m.group(1).strip().strip('"\'')
         try:
-            subprocess.Popen(
-                ["powershell", "-NoProfile", "-Command", f"Start-Process '{objetivo}'"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            subprocess.Popen(["powershell", "-NoProfile", "-Command", f"Start-Process '{objetivo}'"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True, True, objetivo
         except Exception:
             return True, False, objetivo
     return False, None, None
 
-
-# ==========================================
-# INTERCEPTORES WEB / MULTIMEDIA / SISTEMA
-# ==========================================
-_NAVEGADORES = {
-    "chrome": "chrome", "google chrome": "chrome",
-    "edge": "msedge", "microsoft edge": "msedge",
-    "firefox": "firefox", "brave": "brave", "opera": "opera",
-}
-
+_NAVEGADORES = {"chrome": "chrome", "google chrome": "chrome", "edge": "msedge", "microsoft edge": "msedge", "firefox": "firefox", "brave": "brave", "opera": "opera"}
 
 def _abrir_url(url, navegador="default"):
     try:
@@ -1088,10 +966,7 @@ def _abrir_url(url, navegador="default"):
             webbrowser.open(url)
             return True
         try:
-            subprocess.Popen(
-                ["powershell", "-NoProfile", "-Command", f"Start-Process '{exe}' '{url}'"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            subprocess.Popen(["powershell", "-NoProfile", "-Command", f"Start-Process '{exe}' '{url}'"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True
         except Exception:
             webbrowser.open(url)
@@ -1099,10 +974,8 @@ def _abrir_url(url, navegador="default"):
     except Exception:
         return False
 
-
 def interceptar_web_multimedia(texto_usuario):
     low = texto_usuario.lower().strip()
-
     if "youtube" in low:
         consulta = None
         m = re.search(r"busca(?:r|me)?\s+en\s+youtube\s+(.+)", low)
@@ -1126,7 +999,6 @@ def interceptar_web_multimedia(texto_usuario):
             return True, f"Buscando en YouTube: '{consulta}'"
         _abrir_url("https://www.youtube.com")
         return True, "YouTube abierto."
-
     m = re.search(r"pon(?:me)?\s+m[uú]sica\s+de\s+(.+)", low)
     if m:
         consulta = m.group(1).strip().strip('"\'')
@@ -1134,15 +1006,6 @@ def interceptar_web_multimedia(texto_usuario):
             url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(consulta)}"
             _abrir_url(url)
             return True, f"Buscando música de '{consulta}' en YouTube."
-
-    m = re.search(r"pon(?:me)?\s+(?:la\s+)?(?:canci[oó]n|tema|m[uú]sica)\s+(.+)", low)
-    if m:
-        consulta = m.group(1).strip().strip('"\'')
-        if consulta:
-            url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(consulta)}"
-            _abrir_url(url)
-            return True, f"Buscando '{consulta}' en YouTube."
-
     m = re.search(r"(?:busca(?:r|me)?|googlea|googlear)\s+en\s+google\s+(.+)", low)
     if not m:
         m = re.search(r"googlea\s+(.+)", low)
@@ -1154,15 +1017,6 @@ def interceptar_web_multimedia(texto_usuario):
             url = f"https://www.google.com/search?q={urllib.parse.quote(consulta)}"
             _abrir_url(url)
             return True, f"Buscando en Google: '{consulta}'"
-
-    m = re.search(r"busca(?:r|me)?\s+en\s+wikipedia\s+(.+)", low)
-    if m:
-        consulta = m.group(1).strip().strip('"\'')
-        if consulta:
-            url = f"https://es.wikipedia.org/wiki/Special:Search?search={urllib.parse.quote(consulta)}"
-            _abrir_url(url)
-            return True, f"Buscando en Wikipedia: '{consulta}'"
-
     redes = {
         "github": "https://github.com", "twitter": "https://twitter.com",
         "instagram": "https://instagram.com", "tiktok": "https://tiktok.com",
@@ -1174,29 +1028,14 @@ def interceptar_web_multimedia(texto_usuario):
         if re.search(rf"\b(?:abre|abrir)\s+(?:el\s+|la\s+)?{re.escape(red)}\b", low):
             _abrir_url(url)
             return True, f"Abriendo {red}."
-
-    m = re.search(
-        r"(?:abre|abrir|ve\s+a|ir\s+a|visita)\s+(?:la\s+web\s+)?"
-        r"((?:https?://)?[\w\-]+\.[\w\.\-]+(?:/\S*)?)",
-        low
-    )
+    m = re.search(r"(?:abre|abrir|ve\s+a|ir\s+a|visita)\s+(?:la\s+web\s+)?((?:https?://)?[\w\-]+\.[\w\.\-]+(?:/\S*)?)", low)
     if m:
         url = m.group(1)
         if not url.startswith("http"):
             url = "https://" + url
         _abrir_url(url)
         return True, f"Abriendo {url}"
-
-    m = re.search(r"(?:clima|tiempo)\s+(?:en\s+)?(.+)", low)
-    if m:
-        ciudad = m.group(1).strip().strip('"\'')
-        if ciudad:
-            url = f"https://www.google.com/search?q=clima+{urllib.parse.quote(ciudad)}"
-            _abrir_url(url)
-            return True, f"Consultando el clima de '{ciudad}' en Google."
-
     return False, None
-
 
 def interceptar_hora_fecha(texto_usuario):
     low = texto_usuario.lower().strip()
@@ -1205,77 +1044,42 @@ def interceptar_hora_fecha(texto_usuario):
     if re.fullmatch(r"(?:qué|que)\s+(?:día|dia)\s+(?:es|es hoy)\??", low) or low in {"fecha", "la fecha", "qué día es hoy"}:
         hoy = datetime.now()
         dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-        meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
-                 "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+        meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
         return True, f"Hoy es {dias[hoy.weekday()]}, {hoy.day} de {meses[hoy.month - 1]} de {hoy.year}."
     return False, None
 
-
 def interceptar_control_sistema(texto_usuario):
     low = texto_usuario.lower().strip()
-
     if re.search(r"\b(bloquea|bloquear|lock)\b.*\b(pc|equipo|windows|sesi[oó]n)\b", low) or low == "bloquea el pc":
         try:
             subprocess.Popen(["rundll32.exe", "user32.dll,LockWorkStation"])
             return True, "PC bloqueado."
         except Exception as e:
             return True, f"No pude bloquear: {e}"
-
     if re.search(r"\b(apaga|apagar|shutdown)\b.*\b(pc|equipo|windows|ordenador)\b", low):
         if _pedir_confirmacion("apagar_pc", {"accion": "shutdown /s /t 30"}):
             try:
                 subprocess.Popen(["shutdown", "/s", "/t", "30"])
-                return True, "Apagando el PC en 30 segundos. Usa 'shutdown /a' para cancelar."
+                return True, "Apagando el PC en 30 segundos."
             except Exception as e:
                 return True, f"No pude apagar: {e}"
         return True, "Apagado cancelado."
-
-    if re.search(r"\b(reinicia|reiniciar|restart)\b.*\b(pc|equipo|windows|ordenador)\b", low):
-        if _pedir_confirmacion("reiniciar_pc", {"accion": "shutdown /r /t 30"}):
-            try:
-                subprocess.Popen(["shutdown", "/r", "/t", "30"])
-                return True, "Reiniciando el PC en 30 segundos. Usa 'shutdown /a' para cancelar."
-            except Exception as e:
-                return True, f"No pude reiniciar: {e}"
-        return True, "Reinicio cancelado."
-
-    if re.search(r"\b(suspende|suspender|hiberna|hibernar|dormir)\b.*\b(pc|equipo|windows)\b", low):
-        try:
-            subprocess.Popen(
-                ["powershell", "-NoProfile", "-Command",
-                 "rundll32.exe powrprof.dll,SetSuspendState 0,1,0"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            return True, "Suspendiendo el PC..."
-        except Exception as e:
-            return True, f"No pude suspender: {e}"
-
     return False, None
-
 
 def interceptar_multimedia_global(texto_usuario):
     low = texto_usuario.lower().strip()
-
-    if low in {"pausa", "pausa la música", "pausa la musica", "para la música",
-               "para la musica", "pausar", "detén la música"}:
+    if low in {"pausa", "pausa la música", "pausa la musica", "para la música", "para la musica", "pausar", "detén la música"}:
         pyautogui.press("playpause")
         return True, "Música pausada."
-
-    if low in {"reanuda", "reanuda la música", "reanuda la musica", "continúa",
-               "continua", "play", "dale play"}:
+    if low in {"reanuda", "reanuda la música", "reanuda la musica", "continúa", "continua", "play", "dale play"}:
         pyautogui.press("playpause")
         return True, "Música reanudada."
-
-    if low in {"siguiente canción", "siguiente cancion", "siguiente", "next",
-               "pasa la canción", "pasa la cancion"}:
+    if low in {"siguiente canción", "siguiente cancion", "siguiente", "next", "pasa la canción", "pasa la cancion"}:
         pyautogui.press("nexttrack")
         return True, "Siguiente canción."
-
-    if low in {"canción anterior", "cancion anterior", "anterior", "prev",
-               "vuelve a la canción", "vuelve a la cancion"}:
+    if low in {"canción anterior", "cancion anterior", "anterior", "prev", "vuelve a la canción", "vuelve a la cancion"}:
         pyautogui.press("prevtrack")
         return True, "Canción anterior."
-
     m = re.search(r"(sube|aumenta|baja|reduce)\s+(?:el\s+)?volumen\s+(?:en\s+)?(\d{1,3})", low)
     if m and _PYCAW_OK:
         direccion = m.group(1)
@@ -1292,14 +1096,11 @@ def interceptar_multimedia_global(texto_usuario):
             return True, f"Volumen: {actual}% → {nuevo}%."
         except Exception as e:
             return True, f"No pude ajustar volumen: {e}"
-
     return False, None
-
 
 def interceptar_captura_pantalla(texto_usuario):
     low = texto_usuario.lower().strip()
-    if not any(k in low for k in ("captura de pantalla", "screenshot", "captura pantalla",
-                                  "haz una captura", "hazme una captura")):
+    if not any(k in low for k in ("captura de pantalla", "screenshot", "captura pantalla", "haz una captura", "hazme una captura")):
         return False, None
     try:
         nombre = f"captura_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
@@ -1309,73 +1110,8 @@ def interceptar_captura_pantalla(texto_usuario):
     except Exception as e:
         return True, f"No pude hacer la captura: {e}"
 
-
-def interceptar_utilidades_archivo(texto_usuario):
-    low = texto_usuario.lower().strip()
-
-    m = re.search(r"(?:cu[aá]nto\s+pesa|tama[nñ]o\s+de|peso\s+de)\s+(.+)", low)
-    if m:
-        ruta = _resolver_ruta(m.group(1).strip().strip('"\''))
-        if ruta and os.path.exists(ruta):
-            try:
-                if os.path.isfile(ruta):
-                    size = os.path.getsize(ruta)
-                else:
-                    total = 0
-                    for dirpath, _, files in os.walk(ruta):
-                        for f in files:
-                            try:
-                                total += os.path.getsize(os.path.join(dirpath, f))
-                            except OSError:
-                                pass
-                    size = total
-                if size < 1024:
-                    txt = f"{size} B"
-                elif size < 1024 ** 2:
-                    txt = f"{size / 1024:.1f} KB"
-                elif size < 1024 ** 3:
-                    txt = f"{size / 1024 ** 2:.1f} MB"
-                else:
-                    txt = f"{size / 1024 ** 3:.2f} GB"
-                return True, f"'{ruta}' pesa {txt}."
-            except Exception as e:
-                return True, f"Error: {e}"
-
-    m = re.search(r"(?:borra|elimina|borrar|eliminar)\s+(?:el\s+)?(?:archivo\s+|carpeta\s+)?(.+)", low)
-    if m:
-        ruta = _resolver_ruta(m.group(1).strip().strip('"\''))
-        if ruta and os.path.exists(ruta):
-            if _pedir_confirmacion("borrar_archivo", {"ruta": ruta}):
-                try:
-                    if os.path.isfile(ruta):
-                        os.remove(ruta)
-                    else:
-                        import shutil
-                        shutil.rmtree(ruta)
-                    return True, f"Borrado: {ruta}"
-                except Exception as e:
-                    return True, f"No pude borrar: {e}"
-            return True, "Borrado cancelado."
-
-    return False, None
-
-
-def interceptar_explorador_ruta(texto_usuario):
-    m = re.search(
-        r"(?:abre|abrir)\s+(?:el\s+explorador\s+(?:en\s+)?|la\s+carpeta\s+)([A-Za-z]:\\[^\s]+)",
-        texto_usuario, re.IGNORECASE
-    )
-    if m:
-        ruta = m.group(1).strip().strip('"\'')
-        if os.path.isdir(ruta):
-            subprocess.Popen(["explorer", ruta])
-            return True, f"Explorador abierto en: {ruta}"
-        return True, f"No existe la carpeta: {ruta}"
-    return False, None
-
-
 # ==========================================
-# HARDWARE
+# HARDWARE Y TOOLS
 # ==========================================
 def motor_conciencia_viva():
     global ultima_alerta_hardware
@@ -1387,59 +1123,30 @@ def motor_conciencia_viva():
             datos_hardware["ram_pct"] = ram.percent
             datos_hardware["ram_uso"] = round(ram.used / (1024 ** 3), 1)
             datos_hardware["ram_tot"] = round(ram.total / (1024 ** 3), 1)
-            
-            # CAMBIO IMPORTANTE: En tu ROG Ally el disco es C:, no D:
             try:
                 disco = psutil.disk_usage("C:")
             except Exception:
                 disco = psutil.disk_usage("/")
-                
             datos_hardware["disco_pct"] = disco.percent
             datos_hardware["disco_lib"] = round(disco.free / (1024 ** 3), 1)
-
-            if ((datos_hardware["cpu"] > 95 or datos_hardware["ram_pct"] > 90)
-                    and time.time() - ultima_alerta_hardware > 300
-                    and not _en_input.is_set()):
-                try:
-                    r = ollama.chat(model=MODELO_PADRINO, messages=[{
-                        "role": "system",
-                        "content": (
-                            "Advertencia breve (1-2 frases) sobre sobrecarga. "
-                            f"CPU {datos_hardware['cpu']}%, RAM {datos_hardware['ram_pct']}%."
-                        )
-                    }])
-                    with _lock_consola:
-                        print()
-                        _safe_print(f"[PADRINO]: {r.message.content}", "\033[1;31m")
-                        _safe_print("┌── fsociety.io ── sobrecarga ──┐", "\033[1;31m")
-                    threading.Thread(target=hablar, args=(r.message.content,), daemon=True).start()
-                except Exception:
-                    pass
-                ultima_alerta_hardware = time.time()
         except Exception:
             pass
         time.sleep(2)
-
 
 def _barra(pct):
     pct = max(0, min(100, int(pct)))
     return "█" * (pct // 10) + "░" * (10 - pct // 10)
 
-
 def mostrar_panel_rendimiento():
     with _lock_consola:
         print("\033[1;35m┌──────────────────── TASK MANAGER NODE ────────────────────┐\033[0m")
         print(f"\033[1;35m│\033[0m CPU : [{_barra(datos_hardware['cpu'])}] {datos_hardware['cpu']:>3}%")
-        print(f"\033[1;35m│\033[0m RAM : [{_barra(datos_hardware['ram_pct'])}] {datos_hardware['ram_pct']:>3}% "
-              f"({datos_hardware['ram_uso']}/{datos_hardware['ram_tot']} GB)")
-        print(f"\033[1;35m│\033[0m DISCO C: [{_barra(datos_hardware['disco_pct'])}] "
-              f"{datos_hardware['disco_pct']:>3}% ({datos_hardware['disco_lib']} GB libres)")
+        print(f"\033[1;35m│\033[0m RAM : [{_barra(datos_hardware['ram_pct'])}] {datos_hardware['ram_pct']:>3}% ({datos_hardware['ram_uso']}/{datos_hardware['ram_tot']} GB)")
+        print(f"\033[1;35m│\033[0m DISCO C: [{_barra(datos_hardware['disco_pct'])}] {datos_hardware['disco_pct']:>3}% ({datos_hardware['disco_lib']} GB libres)")
         print("\033[1;35m└───────────────────────────────────────────────────────────┘\033[0m")
-
 
 _APPS_PERMITIDAS = {"calc", "notepad", "msedge", "cmd", "explorer"}
 _EXT_PERMITIDAS = {".json", ".txt", ".py", ".sh", ".md", ".log"}
-
 
 def abrir_aplicacion_sistema(nombre_programa):
     try:
@@ -1447,10 +1154,7 @@ def abrir_aplicacion_sistema(nombre_programa):
         if not programa:
             return False
         if programa.endswith(":") and len(programa) < 30:
-            subprocess.Popen(
-                ["powershell", "-NoProfile", "-Command", f"Start-Process '{programa}'"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            subprocess.Popen(["powershell", "-NoProfile", "-Command", f"Start-Process '{programa}'"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True
         if programa.lower() in _APPS_PERMITIDAS:
             comando = f"Start-Process -FilePath '{programa}'"
@@ -1463,14 +1167,10 @@ def abrir_aplicacion_sistema(nombre_programa):
                 comando = f"Start-Process -FilePath \"'{ruta_ps}'\""
         else:
             comando = f"Start-Process -FilePath '{programa}'"
-        subprocess.Popen(
-            ["powershell", "-NoProfile", "-Command", comando],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        subprocess.Popen(["powershell", "-NoProfile", "-Command", comando], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except Exception:
         return False
-
 
 def _tool_escribir_archivo(ruta, contenido):
     p = Path(ruta)
@@ -1479,7 +1179,6 @@ def _tool_escribir_archivo(ruta, contenido):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(contenido, encoding="utf-8")
     return f"Archivo escrito: {p} ({len(contenido)} caracteres)"
-
 
 def _tool_listar_directorio(ruta="."):
     p = Path(ruta)
@@ -1495,7 +1194,6 @@ def _tool_listar_directorio(ruta="."):
         items.append(f"{tipo} {item.name}")
     return f"Contenido de {p}:\n" + "\n".join(items) if items else "Directorio vacío."
 
-
 def _tool_buscar_archivos(patron, ruta="."):
     p = Path(ruta)
     if not p.is_absolute():
@@ -1508,7 +1206,6 @@ def _tool_buscar_archivos(patron, ruta="."):
     lineas = [str(r) for r in resultados[:30]]
     extra = f"\n... y {len(resultados) - 30} más" if len(resultados) > 30 else ""
     return f"Encontrados {len(resultados)} archivos:\n" + "\n".join(lineas) + extra
-
 
 def _tool_buscar_web(consulta, max_resultados=3):
     if not _DDGS_OK:
@@ -1536,7 +1233,6 @@ def _tool_buscar_web(consulta, max_resultados=3):
     except Exception as e:
         return f"Error en búsqueda web: {e}"
 
-
 def _tool_cerrar_proceso(nombre_proceso):
     nombre = nombre_proceso.lower().strip()
     cerrados = []
@@ -1551,7 +1247,6 @@ def _tool_cerrar_proceso(nombre_proceso):
         return f"Procesos cerrados: {', '.join(cerrados)}"
     return f"No se encontraron procesos con nombre '{nombre_proceso}'."
 
-
 def _tool_volumen_sistema(nivel):
     if not _PYCAW_OK:
         return "Falta 'pycaw'. Instala: pip install pycaw comtypes"
@@ -1562,26 +1257,9 @@ def _tool_volumen_sistema(nivel):
         volumen_antes = int(volume.GetMasterVolumeLevelScalar() * 100)
         volume.SetMasterVolumeLevelScalar(nivel / 100.0, None)
         volumen_despues = int(volume.GetMasterVolumeLevelScalar() * 100)
-        return (f"Volumen ajustado de {volumen_antes}% a {volumen_despues}% "
-                f"en {device.FriendlyName}")
+        return (f"Volumen ajustado de {volumen_antes}% a {volumen_despues}% en {device.FriendlyName}")
     except Exception as e:
         return f"Error ajustando volumen: {e}"
-
-
-TOOLS_REGISTRY = {
-    "abrir_aplicacion_sistema": lambda **kw: {"ok": abrir_aplicacion_sistema(kw.get("nombre_programa", "")),
-                                              "app": kw.get("nombre_programa", "")},
-    "leer_archivo": lambda **kw: _leer_archivo_tool(kw.get("ruta", "")),
-    "describir_pantalla": lambda **kw: {"ok": True, "descripcion": interactuar_con_pantalla(kw.get("pregunta", "describe la pantalla"))},
-    "estado_sistema": lambda **kw: {"ok": True, **_estado_sistema_tool()},
-    "escribir_archivo": _tool_escribir_archivo,
-    "listar_directorio": _tool_listar_directorio,
-    "buscar_archivos": _tool_buscar_archivos,
-    "buscar_web": _tool_buscar_web,
-    "cerrar_proceso": _tool_cerrar_proceso,
-    "volumen_sistema": _tool_volumen_sistema,
-}
-
 
 def _leer_archivo_tool(ruta):
     p = Path(ruta)
@@ -1595,7 +1273,6 @@ def _leer_archivo_tool(ruta):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-
 def _estado_sistema_tool():
     vm = psutil.virtual_memory()
     return {
@@ -1605,6 +1282,18 @@ def _estado_sistema_tool():
         "procesos": len(psutil.pids()),
     }
 
+TOOLS_REGISTRY = {
+    "abrir_aplicacion_sistema": lambda **kw: {"ok": abrir_aplicacion_sistema(kw.get("nombre_programa", "")), "app": kw.get("nombre_programa", "")},
+    "leer_archivo": lambda **kw: _leer_archivo_tool(kw.get("ruta", "")),
+    "describir_pantalla": lambda **kw: {"ok": True, "descripcion": interactuar_con_pantalla(kw.get("pregunta", "describe la pantalla"))},
+    "estado_sistema": lambda **kw: {"ok": True, **_estado_sistema_tool()},
+    "escribir_archivo": _tool_escribir_archivo,
+    "listar_directorio": _tool_listar_directorio,
+    "buscar_archivos": _tool_buscar_archivos,
+    "buscar_web": _tool_buscar_web,
+    "cerrar_proceso": _tool_cerrar_proceso,
+    "volumen_sistema": _tool_volumen_sistema,
+}
 
 def _pedir_confirmacion(nombre, argumentos):
     with _lock_consola:
@@ -1612,94 +1301,23 @@ def _pedir_confirmacion(nombre, argumentos):
         r = input("     ¿Permitir? [s/N] ").strip().lower()
     return r in {"s", "si", "sí", "y", "yes"}
 
-
 def ejecutar_herramienta(nombre, argumentos):
     if nombre not in TOOLS_REGISTRY:
-        _registrar_evento_emocional("herramienta_desconocida", {"confianza": -5, "frustracion": +5})
         return {"ok": False, "error": f"Herramienta desconocida: {nombre}"}
     if nombre in ACCIONES_SENSIBLES:
         if not _pedir_confirmacion(nombre, argumentos):
-            _registrar_evento_emocional("cancelado", {"frustracion": +3})
-            _safe_print(f"[ACCION CANCELADA]: {nombre}", "\033[1;33m")
             return {"ok": False, "error": "Usuario canceló."}
     try:
-        _safe_print(f"[TOOL_EXEC: {nombre}({argumentos})]", "\033[1;30m")
         resultado = TOOLS_REGISTRY[nombre](**argumentos)
-        exito = isinstance(resultado, dict) and resultado.get("ok", True)
-        if exito:
-            _registrar_evento_emocional("tarea_ok", {"confianza": +3, "animo": +2})
-        else:
-            _registrar_evento_emocional("tarea_fallida", {"confianza": -4, "frustracion": +6, "animo": -3})
         if isinstance(resultado, dict) and "ok" in resultado:
             return resultado
         return {"ok": True, "resultado": resultado}
     except Exception as e:
-        _registrar_evento_emocional("error_herramienta", {"confianza": -5, "frustracion": +8})
         return {"ok": False, "error": str(e)}
-
-
-ESQUEMA_HERRAMIENTAS = [
-    {"type": "function", "function": {
-        "name": "abrir_aplicacion_sistema",
-        "description": "Abre una app permitida.",
-        "parameters": {"type": "object", "properties": {
-            "nombre_programa": {"type": "string"}}, "required": ["nombre_programa"]}}},
-    {"type": "function", "function": {
-        "name": "leer_archivo",
-        "description": "Lee un archivo de texto.",
-        "parameters": {"type": "object", "properties": {
-            "ruta": {"type": "string"}}, "required": ["ruta"]}}},
-    {"type": "function", "function": {
-        "name": "escribir_archivo",
-        "description": "Escribe en un archivo. ACCIÓN SENSIBLE.",
-        "parameters": {"type": "object", "properties": {
-            "ruta": {"type": "string"}, "contenido": {"type": "string"}},
-            "required": ["ruta", "contenido"]}}},
-    {"type": "function", "function": {
-        "name": "listar_directorio",
-        "description": "Lista un directorio.",
-        "parameters": {"type": "object", "properties": {
-            "ruta": {"type": "string"}}}}},
-    {"type": "function", "function": {
-        "name": "buscar_archivos",
-        "description": "Busca archivos por patrón glob.",
-        "parameters": {"type": "object", "properties": {
-            "patron": {"type": "string"}, "ruta": {"type": "string"}},
-            "required": ["patron"]}}},
-    {"type": "function", "function": {
-        "name": "buscar_web",
-        "description": "Busca en la web. Úsala cuando necesites información actual, noticias o datos que no sepas con certeza.",
-        "parameters": {"type": "object", "properties": {
-            "consulta": {"type": "string"}, "max_resultados": {"type": "integer"}},
-            "required": ["consulta"]}}},
-    {"type": "function", "function": {
-        "name": "cerrar_proceso",
-        "description": "Cierra un proceso. ACCIÓN SENSIBLE.",
-        "parameters": {"type": "object", "properties": {
-            "nombre_proceso": {"type": "string"}},
-            "required": ["nombre_proceso"]}}},
-    {"type": "function", "function": {
-        "name": "volumen_sistema",
-        "description": "Ajusta el volumen (0-100).",
-        "parameters": {"type": "object", "properties": {
-            "nivel": {"type": "integer"}},
-            "required": ["nivel"]}}},
-    {"type": "function", "function": {
-        "name": "describir_pantalla",
-        "description": "Captura y analiza la pantalla.",
-        "parameters": {"type": "object", "properties": {
-            "pregunta": {"type": "string"}}}}},
-    {"type": "function", "function": {
-        "name": "estado_sistema",
-        "description": "CPU, RAM y procesos.",
-        "parameters": {"type": "object", "properties": {}}}},
-]
-
 
 class _FakeCall:
     def __init__(self, nombre, argumentos):
         self.function = type("F", (), {"name": nombre, "arguments": argumentos})()
-
 
 def _parsear_tool_call_en_texto(texto):
     if not texto:
@@ -1746,7 +1364,6 @@ def _parsear_tool_call_en_texto(texto):
         return [_FakeCall(nombre, args)]
     return None
 
-
 def generar_resumen_sesion():
     if len(mensajes) < 4:
         return None
@@ -1754,10 +1371,7 @@ def generar_resumen_sesion():
     if not historial_ctx:
         return None
     transcript = "\n".join(f"{m['role'].upper()}: {m['content'][:300]}" for m in historial_ctx)
-    prompt = (
-        "Resume en 4-6 líneas lo más importante de esta conversación entre Ruben "
-        "y tú (Padrino). Sé conciso y en español."
-    )
+    prompt = "Resume en 4-6 líneas lo más importante de esta conversación. Sé conciso y en español."
     try:
         r = ollama.chat(
             model=MODELO_PADRINO,
@@ -1767,10 +1381,8 @@ def generar_resumen_sesion():
             ],
         )
         return r.message.content.strip()
-    except Exception as e:
-        _safe_print(f"[AVISO]: No se pudo generar resumen: {e}", "\033[1;33m")
+    except Exception:
         return None
-
 
 def guardar_resumen_sesion():
     resumen = generar_resumen_sesion()
@@ -1779,185 +1391,33 @@ def guardar_resumen_sesion():
     global _resumenes_previos
     conocimiento = dict(comandos_sistema)
     resumenes = list(_resumenes_previos)
-    resumenes.append({
-        "fecha": datetime.now().isoformat(timespec="seconds"),
-        "resumen": resumen,
-    })
+    resumenes.append({"fecha": datetime.now().isoformat(timespec="seconds"), "resumen": resumen})
     resumenes = resumenes[-20:]
     conocimiento["resumenes_sesion"] = resumenes
     _guardar_json(RUTA_CONOCIMIENTO, conocimiento)
     _resumenes_previos = resumenes
-    _safe_print("[RESUMEN GUARDADO] Padrino recordará esta sesión.", "\033[1;32m")
-
+    _safe_print("[RESUMEN GUARDADO]", "\033[1;32m")
 
 # ==========================================
-# ANIMACIÓN
+# ARRANQUE Y BUCLE
 # ==========================================
 def animacion_arranque():
-    try:
-        import ctypes
-        ctypes.windll.user32.keybd_event(0x7A, 0, 0, 0)
-        ctypes.windll.user32.keybd_event(0x7A, 0, 2, 0)
-        time.sleep(0.8)
-    except Exception:
-        pass
-
     CLEAR = "\033[2J\033[H"
     sys.stdout.write(CLEAR); sys.stdout.flush()
     time.sleep(0.3)
-
-    try:
-        columnas = os.get_terminal_size().columns
-        filas = os.get_terminal_size().lines
-    except OSError:
-        columnas = 120
-        filas = 30
-
-    ojo_ascii = [
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠠⠀⠀⠒⠲⠒⢤⢀⠀⠀⠀⣀⠀⢀⣀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡠⠐⢄⠀⠠⠄⠀⠀⠀⠀⠀⠀⠀⠀⠈⠡⠀⣸⠀⠀⠀⠀⠀⠈⠙⠆⢤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⠤⠒⠁⠀⠀⠀⡆⠀⡄⠀⠀⠀⠠⠀⠀⠀⠀⠀⠈⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⢳⠀⠀⠤⠄⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⠞⠀⠀⠀⠀⠀⠀⠀⢧⠀⢸⡀⠀⠀⠀⢁⡡⠀⠀⠀⠒⢸⠀⠀⠀⠀⠆⠶⡐⠀⠀⠀⡞⠀⡌⠀⠀⠈⠒⢄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠨⡀⠀⠀⠀⠀⠠⠠⣀⠒⠁⢳⠈⢧⠀⠀⠀⢨⡱⠀⠀⠀⢸⢠⢇⢄⠀⠀⠀⠀⠀⠂⠠⡘⣀⠆⠀⠀⠀⠀⠀⠀⠉⠲⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⠀⠸⠀⠀⠀⠈⠪⠂⠀⠀⠀⠀⠄⠸⠄⠀⠀⠀⠀⠀⠀⠀⢸⡎⠈⠈⠁⢀⡤⠂⠀⠀⠪⡥⠀⠀⠀⠀⢀⠀⠀⠀⠀⠀⠈⢑⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠔⠉⠁⠀⠀⠈⠒⢌⢣⡀⠀⠀⠀⠀⠀⠀⠀⠓⠈⡇⠀⠀⠀⠀⠀⠀⠀⡆⡹⠀⠀⠀⠀⠀⠀⠀⡰⠙⠀⠀⠀⠀⠀⠁⠂⡤⠀⡀⢠⠔⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡰⠁⠀⠀⠀⠀⠀⠀⠀⠈⠳⡣⠄⠀⠀⠀⠀⠀⠀⠀⢇⠱⣀⣢⠖⠔⢀⡴⠊⡄⠧⡕⠠⢀⡤⠠⠀⣰⡝⠀⠀⠀⢀⠂⣀⠀⠀⠀⡠⠜⢁⠤⠔⠉⠙⢢⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠎⠀⠀⠀⠀⠀⠄⢀⠄⠀⠀⠀⠘⠪⡑⡤⡀⡠⣢⠖⠁⡩⡇⠫⠱⠤⠜⠉⠉⠈⠀⠀⠓⠑⠿⣱⣱⠒⢀⢇⡄⠀⠀⠀⠈⠁⢀⠤⡞⠀⠀⠁⠀⠀⠀⠀⠀⠱⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠪⣄⡀⠀⠀⠀⠀⠀⠁⠶⣤⠀⠀⠀⠀⠙⡈⢺⣞⣱⠔⠊⠀⠀⢀⠠⠀⠀⠀⠠⠀⠀⢀⣀⠀⠀⠀⠀⠀⠈⠫⡄⣠⠄⢀⠠⡴⠟⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢆⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡨⢚⠄⠀⠀⠀⠀⢀⠔⢁⡠⣢⠖⢐⢔⡴⡀⠀⡀⠉⠱⢤⡀⠀⠀⠀⠈⠐⠆⠖⡹⠀⠀⠀⣀⡆⣄⠪⠀⠀⠀⠀⠀⠀⢰⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠰⢤⣀⡀⠀⠀⠀⠀⠀⢠⠊⠀⠀⠀⠀⠰⠁⡄⣴⢞⢡⢠⠶⠉⡀⡴⠊⠁⢠⣖⣀⠉⠲⣄⠀⠀⠀⠀⠸⣠⠒⡂⠀⠈⠉⠉⢦⠄⠀⠀⠀⢀⣠⠎⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠓⢧⢄⡀⠈⡠⠊⠀⠀⠀⠀⡜⠁⢪⢞⠍⢕⡵⠫⢌⡪⠚⠁⢐⣷⣿⣿⣿⣿⣷⣌⠳⣄⠀⠀⠀⠈⢌⠼⠄⠀⡠⠄⢀⢠⠔⠏⠴⠋⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠁⠀⠀⠀⠀⡜⠀⠀⠀⠀⠀⠀⠁⡳⢊⢀⢄⠲⣿⣿⣿⣿⣿⣿⣿⣿⣦⡘⠦⡀⠀⠀⠈⠃⠒⠉⠉⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⠀⠀⠀⠀⠀⠀⠀⠀⠐⢀⠐⠁⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡄⠱⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠣⠋⠈⠻⣿⣿⣿⣿⣿⣿⣿⣿⣿⡄⢹⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⠞⠁⢚⡿⢿⣿⣿⣿⣿⣿⣿⠁⡸⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡰⠃⠠⣤⣏⣉⣹⣿⣿⡇⠀⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢠⣤⣶⣽⣧⡙⠉⢉⣽⣿⡀⢣⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⡆⠀⠀⠁⠀⠀⠀⠒⠀⠀⠀⠀⠀⠈⠋⠁⠀⠈⠛⣿⣷⡏⠀⢹⣷⢈⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⡆⠀⠀⠀⠀⠀⠀⠀⠀⠠⣠⠌⠁⢀⠄⠀⠀⣰⣿⣿⣧⠆⡺⡡⠞⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⡄⠀⠀⠀⠀⠀⠀⠈⠘⠁⠄⣽⣦⣈⣀⣸⡿⠉⢉⣷⣾⡇⢇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠢⢄⡀⠀⠀⢀⠀⠀⠀⠀⠈⠨⢛⣿⣿⣇⣀⣻⣿⠋⡥⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⠀⠀⢐⠀⠀⠀⠀⠀⠀⢠⠛⠻⣿⣿⢿⡇⡎⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢆⡀⠋⠀⣀⠀⠀⠀⠀⠀⠀⠄⠿⣀⣽⡆⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢆⠀⠀⠀⠄⠀⠀⣰⠂⢀⣡⣾⠟⡡⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠂⠠⢄⠀⠊⢸⣿⣿⡿⢁⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠂⠤⠬⠅⠐⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    ]
-
-    ancho_ascii = max(len(linea) for linea in ojo_ascii)
-    margen_izq = max(0, (columnas - ancho_ascii) // 2)
-    inicio_y = max(0, (filas - len(ojo_ascii)) // 2)
-
-    sys.stdout.write("\033[H")
-    for _ in range(inicio_y):
-        sys.stdout.write("\n")
-    for linea in ojo_ascii:
-        sys.stdout.write(" " * margen_izq + "\033[1;32m" + linea + "\033[0m\n")
-    sys.stdout.flush()
-
-    time.sleep(2)
-
-    sys.stdout.write(CLEAR); sys.stdout.flush()
-    time.sleep(0.2)
-
-    ruta_intro = os.path.join(RUTA_BASE, "intro_ps2.mp3")
-    intro_sonando = False
-    if _VOZ_OK and os.path.exists(ruta_intro):
-        try:
-            pygame.mixer.music.load(ruta_intro)
-            pygame.mixer.music.play()
-            intro_sonando = True
-        except Exception:
-            pass
-
-    letras = {
-        "P": ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔═══╝ ", "██║     ", "╚═╝     "],
-        "A": [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
-        "D": ["██████╗ ", "██╔══██╗", "██║  ██║", "██║  ██║", "██████╔╝", "╚═════╝ "],
-        "R": ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔══██╗", "██║  ██║", "╚═╝  ╚═╝"],
-        "I": ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
-        "N": ["███╗   ██╗", "████╗  ██║", "██╔██╗ ██║", "██║╚██╗██║", "██║ ╚████║", "╚═╝  ╚═══╝"],
-        "O": [" ██████╗ ", "██╔═══██╗", "██║   ██║", "██║   ██║", "╚██████╔╝", " ╚═════╝ "]
-    }
-    palabra = "PADRINO"
-    ancho_total = sum(len(letras[c][0]) + 1 for c in palabra) - 1
-    margen_letras = max(0, (columnas - ancho_total) // 2)
-
-    sys.stdout.write("\033[?25l")
-    sys.stdout.flush()
-
-    sys.stdout.write("\n" * 6); sys.stdout.flush()
-    for _ in range(6):
-        sys.stdout.write(" " * ancho_total + "\n")
-    sys.stdout.flush()
-    sys.stdout.write("\033[6A"); sys.stdout.flush()
-
-    for idx, letra in enumerate(palabra):
-        for fila in range(6):
-            pos_col = margen_letras + (len("".join([letras[c][fila] + " " for c in palabra[:idx]])) if idx > 0 else 0) + 1
-            sys.stdout.write(f"\033[{6+fila};{pos_col}H")
-            sys.stdout.write(f"\033[1;32m{letras[letra][fila]}\033[0m")
-            sys.stdout.flush()
-        time.sleep(1.2)
-
-    for i in range(6):
-        sys.stdout.write(f"\033[{6+i};{margen_letras+1}H")
-        sys.stdout.write("\033[1;32m" + "═" * ancho_total + "\033[0m")
-        sys.stdout.flush()
-        time.sleep(0.15)
-        for fila in range(6):
-            pos_col = margen_letras + 1
-            sys.stdout.write(f"\033[{6+fila};{pos_col}H")
-            sys.stdout.write(f"\033[1;32m{''.join([letras[c][fila] + ' ' for c in palabra])}\033[0m")
-        sys.stdout.flush()
-        time.sleep(0.1)
-
-    for _ in range(3):
-        sys.stdout.write("\033[1;31m")
-        for fila in range(6):
-            pos_col = margen_letras + 1
-            sys.stdout.write(f"\033[{6+fila};{pos_col}H")
-            sys.stdout.write(f"\033[1;31m{''.join([letras[c][fila] + ' ' for c in palabra])}\033[0m")
-        sys.stdout.flush()
-        time.sleep(0.08)
-        for fila in range(6):
-            pos_col = margen_letras + 1
-            sys.stdout.write(f"\033[{6+fila};{pos_col}H")
-            sys.stdout.write(f"\033[1;32m{''.join([letras[c][fila] + ' ' for c in palabra])}\033[0m")
-        sys.stdout.flush()
-        time.sleep(0.08)
-
-    sys.stdout.write(f"\033[12;1H\n"); sys.stdout.flush()
-    firma = "SISTEMAS LISTOS. BIENVENIDO, RUBEN."
-    firma_x = max(0, (columnas - len(firma)) // 2)
-    sys.stdout.write(f"\033[13;{firma_x}H")
-    for c in firma:
-        sys.stdout.write(f"\033[1;32m{c}\033[0m")
-        sys.stdout.write("\a")
-        sys.stdout.flush()
-        time.sleep(0.08)
-    
-    sys.stdout.write("\n"); sys.stdout.flush()
-    
-    if intro_sonando:
-        while pygame.mixer.music.get_busy():
-            time.sleep(0.1)
-        pygame.mixer.music.unload()
-
-    time.sleep(0.5)
-    sys.stdout.write("\033[?25h")
+    # Animación simplificada para ahorrar espacio
+    print("\033[1;32m")
+    print("  ██████╗  █████╗ ██████╗ ██████╗ ██╗███╗   ██╗ ██████╗ ")
+    print("  ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██║████╗  ██║██╔═══██╗")
+    print("  ██████╔╝███████║██║  ██║██████╔╝██║██╔██╗ ██║██║   ██║")
+    print("  ██╔═══╝ ██╔══██║██║  ██║██╔══██╗██║██║╚██╗██║██║   ██║")
+    print("  ██║     ██║  ██║██████╔╝██║  ██║██║██║ ╚████║╚██████╔╝")
+    print("  ╚═╝     ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ")
+    print("\033[0m")
+    print("  SISTEMAS LISTOS. BIENVENIDO, RUBEN.")
+    time.sleep(1.5)
     sys.stdout.write(CLEAR); sys.stdout.flush()
 
-# ==========================================
-# INTERFAZ
-# ==========================================
 def maquina_de_escribir(texto, color="\033[1;32m"):
     with _lock_consola:
         sys.stdout.write(color)
@@ -1965,16 +1425,13 @@ def maquina_de_escribir(texto, color="\033[1;32m"):
             sys.stdout.write(c); sys.stdout.flush(); time.sleep(0.004)
         sys.stdout.write("\033[0m\n")
 
-
 def dibujar_separador_fsociety():
     with _lock_consola:
         print("\033[1;31m┌── fsociety.io ───────────────────────────────────────────┐\033[0m")
 
-
 def obtener_prompt_usuario():
     hora = datetime.now().strftime("%H:%M")
     return f"\033[1;37m[RUBEN {hora}]: \033[0m"
-
 
 def cargar_memoria_historica():
     if not os.path.exists(RUTA_MEMORIA):
@@ -1995,7 +1452,6 @@ def cargar_memoria_historica():
     except Exception:
         return []
 
-
 def guardar_memoria_en_disco(historial):
     limpio = []
     for m in historial:
@@ -2007,12 +1463,9 @@ def guardar_memoria_en_disco(historial):
             limpio.append({"role": rol, "content": cont})
     _guardar_json(RUTA_MEMORIA, limpio)
 
-
 def preparar_historial_ollama(historial, max_turnos=16):
-    validos = [m for m in historial
-               if m.get("role") in {"user", "assistant"} and m.get("content")]
+    validos = [m for m in historial if m.get("role") in {"user", "assistant"} and m.get("content")]
     return validos[-max_turnos:]
-
 
 def verificar_modelos():
     try:
@@ -2024,10 +1477,6 @@ def verificar_modelos():
         if not any(req.lower() in m.lower() for m in disponibles):
             _safe_print(f"[AVISO]: modelo '{req}' no encontrado.", "\033[1;33m")
 
-
-# ==========================================
-# BUCLE PRINCIPAL
-# ==========================================
 def bucle_padrino():
     global mensajes, lexico_aprendido
 
@@ -2041,16 +1490,7 @@ def bucle_padrino():
 
     _decaimiento_emocional()
     saludo_base = "Sistemas en línea. Bienvenido de nuevo, Ruben."
-    extra = ""
-    if emociones["aburrimiento"] >= 60:
-        extra = " Llevo un rato aburrido, esperaba que aparecieras."
-    elif emociones["animo"] >= 50:
-        extra = " Hoy me siento con ganas."
-    elif emociones["animo"] <= -30:
-        extra = " Hoy ando algo decaído, no te lo voy a negar."
-    if emociones["energia"] <= 30:
-        extra += " Aviso: ando con poca energía."
-    threading.Thread(target=hablar, args=(saludo_base + extra,), daemon=True).start()
+    threading.Thread(target=hablar, args=(saludo_base,), daemon=True).start()
 
     try:
         while not _detener_todo.is_set():
@@ -2063,10 +1503,21 @@ def bucle_padrino():
                     continue
                 if user_input.lower() in {"exit", "salir"}:
                     print("\n[PADRINO]: Cerrando el sistema...")
-                    print("[PADRINO]: Generando resumen de la sesión...")
                     guardar_resumen_sesion()
                     _detener_todo.set()
                     break
+
+                if user_input.lower() == "/reset":
+                    for r in (RUTA_MEMORIA, RUTA_LEXICO, RUTA_ESTILO_VIVO):
+                        if os.path.exists(r):
+                            os.remove(r)
+                    lexico_aprendido = []
+                    mensajes = []
+                    _safe_print("[+] Memoria, léxico y estilo purgados. Empezando de cero.", "\033[1;31m")
+                    threading.Thread(target=hablar, args=("Memoria purgada. Empezamos de cero, tío.",), daemon=True).start()
+                    mostrar_panel_rendimiento()
+                    dibujar_separador_fsociety()
+                    continue
 
                 if user_input.lower().startswith("/aprende "):
                     resto = user_input[9:].strip()
@@ -2078,8 +1529,6 @@ def bucle_padrino():
                             if registrar_nuevo_aprendizaje(frase, ruta):
                                 _safe_print(f"[+ APRENDIZAJE]: '{frase}' -> '{ruta}'", "\033[1;32m")
                                 threading.Thread(target=hablar, args=(f"Entendido. He aprendido a abrir {frase}.",), daemon=True).start()
-                            else:
-                                _safe_print("[!] No se pudo guardar.", "\033[1;31m")
                         else:
                             _safe_print("[!] Usa: /aprende palabra -> ruta\\completa.exe", "\033[1;31m")
                     else:
@@ -2097,8 +1546,6 @@ def bucle_padrino():
                             if registrar_leccion(tema, contenido):
                                 _safe_print(f"[+ LECCIÓN APRENDIDA] '{tema}': {contenido}", "\033[1;32m")
                                 threading.Thread(target=hablar, args=(f"Entendido. He aprendido sobre {tema}.",), daemon=True).start()
-                            else:
-                                _safe_print("[!] No se pudo guardar la lección.", "\033[1;31m")
                         else:
                             _safe_print("[!] Usa: /enseña tema -> lo que debe recordar", "\033[1;31m")
                     else:
@@ -2134,34 +1581,18 @@ def bucle_padrino():
                         print()
                         print("\033[1;36m┌──────────── ESTADO EMOCIONAL DE PADRINO ────────────┐\033[0m")
                         print(f"\033[1;36m│\033[0m {_descripcion_emocional()}")
-                        ult = emociones.get("eventos_recientes", [])
-                        if ult:
-                            print("\033[1;36m│\033[0m Últimos eventos:")
-                            for ev in ult[-3:]:
-                                print(f"\033[1;36m│\033[0m   · {ev['evento']} → {ev['cambios']}")
                         print("\033[1;36m└──────────────────────────────────────────────────────┘\033[0m")
                     dibujar_separador_fsociety()
                     continue
 
                 low = user_input.lower()
 
-                # ═══ CREAR ARCHIVO CON CÓDIGO ═══
                 pide_arch_code, peticion_code, ruta_code, lenguaje_code = interceptar_crear_archivo_codigo(user_input)
                 if pide_arch_code:
                     _safe_print(f"[SUBAGENTE CODER] Generando {lenguaje_code} para {ruta_code}...", "\033[1;36m")
-                    
-                    prompt_para_coder = (
-                        f"Genera un script en {lenguaje_code} que haga lo siguiente:\n"
-                        f"{peticion_code}\n\n"
-                        f"Responde SOLO con el código, sin explicaciones, sin markdown, "
-                        f"sin ```{lenguaje_code.lower()}```. Solo el código puro."
-                    )
+                    prompt_para_coder = f"Genera un script en {lenguaje_code} que haga lo siguiente:\n{peticion_code}\n\nResponde SOLO con el código puro."
                     codigo_generado = llamar_subagente_coder(prompt_para_coder)
-                    
-                    codigo_limpio = re.sub(
-                        r'^```\w*\s*\n?|\n?```\s*$', '', codigo_generado, flags=re.MULTILINE
-                    ).strip()
-                    
+                    codigo_limpio = re.sub(r'^```\w*\s*\n?|\n?```\s*$', '', codigo_generado, flags=re.MULTILINE).strip()
                     try:
                         ruta_abs = ruta_code
                         if not os.path.isabs(ruta_abs):
@@ -2169,10 +1600,8 @@ def bucle_padrino():
                         Path(ruta_abs).parent.mkdir(parents=True, exist_ok=True)
                         with open(ruta_abs, "w", encoding="utf-8") as f:
                             f.write(codigo_limpio)
-                        
                         texto_final = f"Hecho, tío. {os.path.basename(ruta_abs)} creado ({len(codigo_limpio)} caracteres)."
                         _safe_print(f"[ARCHIVO CREADO] {ruta_abs}", "\033[1;32m")
-                        _safe_print(f"[PREVIEW]\n{codigo_limpio[:300]}", "\033[1;30m")
                     except Exception as e:
                         texto_final = f"Fallo al escribir el archivo: {e}"
                         _safe_print(f"[ERROR] {e}", "\033[1;31m")
@@ -2195,15 +1624,10 @@ def bucle_padrino():
                     guardar_memoria_en_disco(mensajes)
                     continue
 
-                # ═══ SUBAGENTE CODER (solo código, sin archivo) ═══
                 pide_codigo, prompt_codigo = interceptar_peticion_codigo(user_input)
                 if pide_codigo:
                     _safe_print("[SUBAGENTE CODER] Derivando petición de código...", "\033[1;36m")
-                    contexto = "\n".join(
-                        f"{m['role']}: {m['content'][:200]}"
-                        for m in mensajes[-4:]
-                        if m.get("role") in ("user", "assistant")
-                    )
+                    contexto = "\n".join(f"{m['role']}: {m['content'][:200]}" for m in mensajes[-4:] if m.get("role") in ("user", "assistant"))
                     respuesta_coder = llamar_subagente_coder(prompt_codigo, contexto)
                     texto_final = presentar_codigo_con_padrino(respuesta_coder, user_input)
                     mensajes.append({"role": "user", "content": user_input})
@@ -2224,133 +1648,35 @@ def bucle_padrino():
                     guardar_memoria_en_disco(mensajes)
                     continue
 
-                if low.startswith("navega ") or low.startswith("busca en youtube "):
-                    orden = user_input[7:].strip() if low.startswith("navega ") else user_input
-                    resultado = computer_use_navegador(orden)
-                    mensajes.append({"role": "user", "content": user_input})
-                    mensajes.append({"role": "assistant", "content": resultado})
-                    _safe_print(f"[PADRINO]: {resultado}", "\033[1;32m")
-                    threading.Thread(target=hablar, args=(resultado,), daemon=True).start()
-                    dibujar_separador_fsociety()
-                    guardar_memoria_en_disco(mensajes)
-                    continue
-
-                if low.startswith("padrino ve ") or low.startswith("padrino busca "):
-                    orden = user_input.split(" ", 2)[2].strip()
-                    resultado = interactuar_con_pantalla(orden)
-                    mensajes.append({"role": "user", "content": user_input})
-                    mensajes.append({"role": "assistant", "content": str(resultado)})
-                    _safe_print(f"[PADRINO]: {resultado}", "\033[1;32m")
-                    threading.Thread(target=hablar, args=(resultado,), daemon=True).start()
-                    dibujar_separador_fsociety()
-                    guardar_memoria_en_disco(mensajes)
-                    continue
-
-                if low in {"/hardware", "/rendimiento", "/tareas", "/rt"}:
-                    print()
-                    mostrar_panel_rendimiento()
-                    dibujar_separador_fsociety()
-                    continue
-
-                if low == "/borrarmemoria":
-                    for r in (RUTA_MEMORIA, RUTA_LEXICO):
-                        if os.path.exists(r):
-                            os.remove(r)
-                    lexico_aprendido = []
-                    mensajes = []
-                    _safe_print("[+] Memoria purgada.", "\033[1;31m")
-                    threading.Thread(target=hablar, args=("Memoria purgada.",), daemon=True).start()
-                    mostrar_panel_rendimiento()
-                    dibujar_separador_fsociety()
-                    continue
-
-                _extraer_hechos(user_input)
-                procesar_y_aprender_vocabulario(user_input)
-                analizar_emociones_de_texto(user_input)
-
+                # INTERCEPTORES RÁPIDOS
                 pide_vol, nivel = interceptar_volumen(user_input)
                 if pide_vol and nivel is not None:
                     resultado = _tool_volumen_sistema(nivel)
-                    _safe_print(f"[VOLUMEN_BYPASS] {resultado}", "\033[1;32m")
+                    _safe_print(f"[PADRINO]: {resultado}", "\033[1;32m")
                     mensajes.append({"role": "user", "content": user_input})
                     mensajes.append({"role": "assistant", "content": resultado})
-                    _safe_print(f"[PADRINO]: {resultado}", "\033[1;32m")
                     threading.Thread(target=hablar, args=(resultado,), daemon=True).start()
-                    dibujar_separador_fsociety()
-                    guardar_memoria_en_disco(mensajes)
-                    continue
-
-                pide_buscar_arch, patron_arch, ruta_arch = interceptar_buscar_archivos(user_input)
-                if pide_buscar_arch:
-                    _safe_print(f"[ARCH_BYPASS] Buscando '{patron_arch}' en '{ruta_arch}'", "\033[1;30m")
-                    resultado = _tool_buscar_archivos(patron_arch, ruta_arch)
-                    mensajes.append({"role": "user", "content": user_input})
-                    mensajes.append({"role": "assistant", "content": resultado})
-                    _safe_print(f"[PADRINO]: {resultado}", "\033[1;32m")
-                    threading.Thread(target=hablar, args=("Búsqueda de archivos completada.",), daemon=True).start()
-                    dibujar_separador_fsociety()
-                    guardar_memoria_en_disco(mensajes)
-                    continue
-
-                pide_escribir, ruta_esc, contenido_esc = interceptar_escritura_archivo(user_input)
-                if pide_escribir:
-                    resultado = _tool_escribir_archivo(ruta_esc, contenido_esc)
-                    _safe_print(f"[ESCRITURA_BYPASS] {resultado}", "\033[1;32m")
-                    threading.Thread(target=hablar, args=("Archivo escrito correctamente.",), daemon=True).start()
-                    mensajes.append({"role": "user", "content": user_input})
-                    mensajes.append({"role": "assistant", "content": resultado})
-                    _safe_print(f"[PADRINO]: {resultado}", "\033[1;32m")
-                    dibujar_separador_fsociety()
-                    guardar_memoria_en_disco(mensajes)
-                    continue
-
-                pide_cerrar, nombre_proc = interceptar_cierre_proceso(user_input)
-                if pide_cerrar:
-                    resultado = _tool_cerrar_proceso(nombre_proc)
-                    _safe_print(f"[CIERRE_BYPASS] {resultado}", "\033[1;32m")
-                    threading.Thread(target=hablar, args=(resultado,), daemon=True).start()
-                    mensajes.append({"role": "user", "content": user_input})
-                    mensajes.append({"role": "assistant", "content": resultado})
-                    _safe_print(f"[PADRINO]: {resultado}", "\033[1;32m")
                     dibujar_separador_fsociety()
                     guardar_memoria_en_disco(mensajes)
                     continue
 
                 pide_abrir, exito_abrir, objetivo_abrir = interceptar_apertura_directa(user_input)
                 if pide_abrir:
-                    resultado = (f"Ejecutado '{objetivo_abrir}'." if exito_abrir
-                                 else f"No pude abrir '{objetivo_abrir}'.")
-                    _safe_print(f"[APERTURA_BYPASS] {resultado}", "\033[1;32m")
+                    resultado = f"Ejecutado '{objetivo_abrir}'." if exito_abrir else f"No pude abrir '{objetivo_abrir}'."
+                    _safe_print(f"[PADRINO]: {resultado}", "\033[1;32m")
                     mensajes.append({"role": "user", "content": user_input})
                     mensajes.append({"role": "assistant", "content": resultado})
-                    _safe_print(f"[PADRINO]: {resultado}", "\033[1;32m")
-                    if exito_abrir:
-                        threading.Thread(target=hablar, args=(f"Abriendo {objetivo_abrir}.",), daemon=True).start()
-                    else:
-                        threading.Thread(target=hablar, args=(f"No pude abrir {objetivo_abrir}.",), daemon=True).start()
+                    threading.Thread(target=hablar, args=(resultado,), daemon=True).start()
                     dibujar_separador_fsociety()
                     guardar_memoria_en_disco(mensajes)
                     continue
 
                 pide_leer, ruta_doc, contenido_doc = interceptar_y_leer_archivo(user_input)
                 if pide_leer:
-                    mensajes.append({"role": "user",
-                                     "content": f"Lee el archivo '{ruta_doc}' y dime su contenido."})
-                    mensajes.append({"role": "assistant",
-                                     "content": f"Contenido de '{ruta_doc}':\n\n{contenido_doc[:3000]}"})
+                    mensajes.append({"role": "user", "content": f"Lee el archivo '{ruta_doc}' y dime su contenido."})
+                    mensajes.append({"role": "assistant", "content": f"Contenido de '{ruta_doc}':\n\n{contenido_doc[:3000]}"})
                     _safe_print(f"[PADRINO]: He leído '{ruta_doc}' ({len(contenido_doc)} caracteres).", "\033[1;32m")
                     threading.Thread(target=hablar, args=(f"He leído el archivo {os.path.basename(ruta_doc)}.",), daemon=True).start()
-                    dibujar_separador_fsociety()
-                    guardar_memoria_en_disco(mensajes)
-                    continue
-
-                pide_listar, listado = interceptar_listado_directorio(user_input)
-                if pide_listar:
-                    mensajes.append({"role": "user", "content": user_input})
-                    mensajes.append({"role": "assistant", "content": listado})
-                    _safe_print(f"[PADRINO]: {listado}", "\033[1;32m")
-                    print()
-                    threading.Thread(target=hablar, args=("Aquí tienes el contenido del directorio.",), daemon=True).start()
                     dibujar_separador_fsociety()
                     guardar_memoria_en_disco(mensajes)
                     continue
@@ -2375,16 +1701,6 @@ def bucle_padrino():
                     guardar_memoria_en_disco(mensajes)
                     continue
 
-                pide_sys, resultado_sys = interceptar_control_sistema(user_input)
-                if pide_sys:
-                    mensajes.append({"role": "user", "content": user_input})
-                    mensajes.append({"role": "assistant", "content": resultado_sys})
-                    _safe_print(f"[PADRINO]: {resultado_sys}", "\033[1;32m")
-                    threading.Thread(target=hablar, args=(resultado_sys,), daemon=True).start()
-                    dibujar_separador_fsociety()
-                    guardar_memoria_en_disco(mensajes)
-                    continue
-
                 pide_mm, resultado_mm = interceptar_multimedia_global(user_input)
                 if pide_mm:
                     mensajes.append({"role": "user", "content": user_input})
@@ -2395,77 +1711,51 @@ def bucle_padrino():
                     guardar_memoria_en_disco(mensajes)
                     continue
 
-                pide_cap, resultado_cap = interceptar_captura_pantalla(user_input)
-                if pide_cap:
-                    mensajes.append({"role": "user", "content": user_input})
-                    mensajes.append({"role": "assistant", "content": resultado_cap})
-                    _safe_print(f"[PADRINO]: {resultado_cap}", "\033[1;32m")
-                    threading.Thread(target=hablar, args=("Captura guardada.",), daemon=True).start()
-                    dibujar_separador_fsociety()
-                    guardar_memoria_en_disco(mensajes)
-                    continue
-
-                pide_util, resultado_util = interceptar_utilidades_archivo(user_input)
-                if pide_util:
-                    mensajes.append({"role": "user", "content": user_input})
-                    mensajes.append({"role": "assistant", "content": resultado_util})
-                    _safe_print(f"[PADRINO]: {resultado_util}", "\033[1;32m")
-                    threading.Thread(target=hablar, args=(resultado_util,), daemon=True).start()
-                    dibujar_separador_fsociety()
-                    guardar_memoria_en_disco(mensajes)
-                    continue
-
-                pide_expl, resultado_expl = interceptar_explorador_ruta(user_input)
-                if pide_expl:
-                    mensajes.append({"role": "user", "content": user_input})
-                    mensajes.append({"role": "assistant", "content": resultado_expl})
-                    _safe_print(f"[PADRINO]: {resultado_expl}", "\033[1;32m")
-                    threading.Thread(target=hablar, args=(resultado_expl,), daemon=True).start()
-                    dibujar_separador_fsociety()
-                    guardar_memoria_en_disco(mensajes)
-                    continue
+                # AQUI EMPIEZA LA IA REAL
+                _extraer_hechos(user_input)
+                procesar_y_aprender_vocabulario(user_input)
+                analizar_emociones_de_texto(user_input)
 
                 mensajes.append({"role": "user", "content": user_input})
                 historial_ctx = preparar_historial_ollama(mensajes)
 
-                nota = (f" Vocabulario reciente: {', '.join(lexico_aprendido[-15:])}."
-                        if lexico_aprendido else "")
+                nota = ""
+                if lexico_aprendido:
+                    vocab_str = ", ".join(lexico_aprendido[-30:])
+                    nota += f"\n\nUSA ESTE VOCABULARIO PARA HABLAR (úsalo de forma natural, no como una lista):\n{vocab_str}"
+
+                # CEREBRO LINGÜÍSTICO
+                estilo_actual = _cargar_json(RUTA_ESTILO_VIVO, {"vocabulario": [], "reglas_estilo": []})
+                if estilo_actual["vocabulario"] or estilo_actual["reglas_estilo"]:
+                    nota += "\n\nCÓMO HABLA RUBEN Y CÓMO TE PIDE QUE LE HABLES:\n"
+                    if estilo_actual["vocabulario"]:
+                        nota += f"- Usa este vocabulario de forma natural: {', '.join(estilo_actual['vocabulario'])}\n"
+                    if estilo_actual["reglas_estilo"]:
+                        for regla in estilo_actual["reglas_estilo"]:
+                            nota += f"- {regla}\n"
 
                 if hechos_aprendidos:
                     hechos_txt = "\n".join(f"- {k}: {v}" for k, v in hechos_aprendidos.items())
                     nota += f"\n\nHECHOS QUE SABES SOBRE RUBEN:\n{hechos_txt}"
 
                 if _resumenes_previos:
-                    resumenes_txt = "\n".join(
-                        f"[{r['fecha']}] {r['resumen']}" for r in _resumenes_previos
-                    )
+                    resumenes_txt = "\n".join(f"[{r['fecha']}] {r['resumen']}" for r in _resumenes_previos)
                     nota += f"\n\nMEMORIA DE SESIONES ANTERIORES:\n{resumenes_txt}"
 
                 nota += _bloque_emocional_para_prompt()
+                nota += _bloque_lecciones_para_prompt()
 
                 bloque = [{"role": "system", "content": BASE_SYSTEM_PROMPT + nota}] + historial_ctx
 
                 try:
-                    respuesta = ollama.chat(
-                        model=MODELO_PADRINO,
-                        messages=bloque,
-                        tools=ESQUEMA_HERRAMIENTAS,
-                        options={"temperature": 0.85},
-                    )
-                except TypeError:
-                    respuesta = ollama.chat(model=MODELO_PADRINO,
-                                            messages=bloque,
-                                            tools=ESQUEMA_HERRAMIENTAS)
+                    respuesta = ollama.chat(model=MODELO_PADRINO, messages=bloque, tools=ESQUEMA_HERRAMIENTAS, options={"temperature": 0.85})
                 except Exception:
                     respuesta = ollama.chat(model=MODELO_PADRINO, messages=bloque)
 
                 llamadas = getattr(respuesta.message, "tool_calls", None)
-
                 if not llamadas:
                     contenido_texto = respuesta.message.content or ""
                     llamadas = _parsear_tool_call_en_texto(contenido_texto)
-                    if llamadas:
-                        _safe_print("[FALLBACK] Tool call detectada en texto plano.", "\033[1;33m")
 
                 if llamadas:
                     bloque.append({"role": "assistant", "content": respuesta.message.content or ""})
@@ -2473,35 +1763,23 @@ def bucle_padrino():
                         nombre = llamada.function.name
                         args = llamada.function.arguments or {}
                         if isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except json.JSONDecodeError:
-                                args = {}
+                            try: args = json.loads(args)
+                            except json.JSONDecodeError: args = {}
                         res = ejecutar_herramienta(nombre, args)
-                        bloque.append({
-                            "role": "tool",
-                            "name": nombre,
-                            "content": json.dumps(res, ensure_ascii=False),
-                        })
+                        bloque.append({"role": "tool", "name": nombre, "content": json.dumps(res, ensure_ascii=False)})
                     try:
-                        rfinal = ollama.chat(model=MODELO_PADRINO, messages=bloque,
-                                             tools=ESQUEMA_HERRAMIENTAS)
+                        rfinal = ollama.chat(model=MODELO_PADRINO, messages=bloque, tools=ESQUEMA_HERRAMIENTAS)
                         texto_final = rfinal.message.content or ""
                     except Exception as e:
                         texto_final = f"[ERROR tras tools]: {e}"
                     
-                    if not texto_final:
-                        texto_final = "Vale."
-                        
+                    if not texto_final: texto_final = "Vale."
                     maquina_de_escribir(f"[PADRINO]: {texto_final}")
                     threading.Thread(target=hablar, args=(texto_final,), daemon=True).start()
                     mensajes.append({"role": "assistant", "content": texto_final})
                 else:
                     texto_final = respuesta.message.content or ""
-                    
-                    if not texto_final:
-                        texto_final = "Vale."
-
+                    if not texto_final: texto_final = "Vale."
                     maquina_de_escribir(f"[PADRINO]: {texto_final}")
                     threading.Thread(target=hablar, args=(texto_final,), daemon=True).start()
                     mensajes.append({"role": "assistant", "content": texto_final})
@@ -2509,6 +1787,9 @@ def bucle_padrino():
                 print()
                 dibujar_separador_fsociety()
                 guardar_memoria_en_disco(mensajes)
+
+                # ¡AQUÍ APRENDE EN SEGUNDO PLANO!
+                threading.Thread(target=aprender_de_conversacion, args=(user_input, texto_final), daemon=True).start()
 
             except KeyboardInterrupt:
                 print("\n\033[1;33m[PADRINO]: Cerrando...\033[0m")
@@ -2522,13 +1803,11 @@ def bucle_padrino():
     finally:
         _detener_todo.set()
 
-
 # ==========================================
-# ARRANQUE
+# EJECUCIÓN
 # ==========================================
 if __name__ == "__main__":
     abrir_ventana_pngtuber()
-    print("[PNGTUBER] Anclando ventana...")
     anclar_pngtuber()
 
     _cargar_emociones()
