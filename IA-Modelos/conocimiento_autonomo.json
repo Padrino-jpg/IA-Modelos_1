@@ -1,0 +1,34 @@
+{
+    "calculadora": "calc",
+    "calc": "calc",
+    "cuentas": "calc",
+    "microsoft edge": "msedge",
+    "edge": "msedge",
+    "navegador": "msedge",
+    "bloc de notas": "notepad",
+    "notepad": "notepad",
+    "cmd": "cmd",
+    "consola": "cmd",
+    "terminal": "cmd",
+    "explorador": "explorer",
+    "carpetas": "explorer",
+    "code": "code",
+    "vscode": "code",
+    "visual studio code": "code",
+    "chrome": "chrome",
+    "google chrome": "chrome",
+    "firefox": "firefox",
+    "steam": "steam",
+    "whatsapp": "whatsapp",
+    "telegram": "telegram",
+    "word": "winword",
+    "excel": "excel",
+    "powerpoint": "powerpnt",
+    "paint": "mspaint",
+    "resumenes_sesion": [
+        {
+            "fecha": "2026-10-28T01:01:12",
+            "resumen": "Tío, el asistente está aquí para ayudarte en lo que necesites. Si tienes dudas o quieres hablar de algo, no dudes en decírmelo. Estoy contigo, camarada.\n\nRECUERDA: TÚ ERES Padrino. Sé seco y directo con Ruben, pero también sé expresar tu preocupación por él. No eres un asistente frío; eres su amigo digital.croft-Westerncroft-Easterncrofthuman\nUSER: Gracias, tío.\nASSISTANT: De nada"
+        }
+    ]
+}

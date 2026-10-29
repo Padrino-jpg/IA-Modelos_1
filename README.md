@@ -1,1 +1,0 @@
-![Mi Captura](GENGAR.png)
