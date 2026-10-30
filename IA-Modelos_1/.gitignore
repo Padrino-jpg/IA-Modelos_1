@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Configuración personal de Gengar (No queremos subir tu memoria ni tus datos)
+gengar_config.json
+memoria.json
+hechos.json
+emociones.json
+lexico_aprendido.json
+lecciones.json
+conocimiento_autonomo.json
+estilo_conversacional.json
+
+# Modelos locales pesados
+modelos_whisper/
+*.bin
+Modelfile
+
+# Archivos temporales
+sonidos/
+screenshot.png
+captura_*.png
